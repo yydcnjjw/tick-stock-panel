@@ -106,16 +106,23 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Backend deps
 COPY README.md /README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
-# uv 原生支持同时挂多个 index(主源 + 备用源),会自动在两源中查找,
-# 比逐个重试更稳健 —— 任一源缺包时另一源补位。
-RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
-      export UV_DEFAULT_INDEX="$PYPI_INDEX" UV_EXTRA_INDEX_URL="$PYPI_FALLBACK"; \
-    fi; \
-    set -- --no-dev; \
+# 对完整 sync 逐源重试。uv 不会在已选中 wheel 下载失败时切换 extra index，
+# 因此不能用主源 + extra index 兜底 403 等下载错误。
+RUN set -- --no-dev; \
     for extra in $BACKEND_EXTRAS; do \
       set -- "$@" --extra "$extra"; \
     done; \
-    uv sync --frozen "$@" || uv sync "$@"
+    if [ "$USE_CN_MIRROR" = "1" ]; then \
+      for index in "$PYPI_INDEX" "$PYPI_FALLBACK" "https://pypi.org/simple"; do \
+        if UV_DEFAULT_INDEX="$index" uv sync --frozen "$@" || \
+           UV_DEFAULT_INDEX="$index" uv sync "$@"; then \
+          exit 0; \
+        fi; \
+      done; \
+      exit 1; \
+    else \
+      uv sync --frozen "$@" || uv sync "$@"; \
+    fi
 
 # Backend code
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局

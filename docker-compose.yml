@@ -8,11 +8,13 @@ services:
       args:
         BACKEND_EXTRAS: ${BACKEND_EXTRAS:-}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-0.144.3}
+        INCLUDE_STOCKSDK: 1
     container_name: TickFlow_Stock_Panel
-    ports:
-      - "${HOST:-0.0.0.0}:${PORT:-3018}:3018"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: "host"
+    # ports:
+    #   - "${HOST:-0.0.0.0}:${PORT:-3018}:3018"
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
@@ -22,7 +24,7 @@ services:
       # 无论 .env 怎么写这里都以容器路径为准。
       - DATA_DIR=/app/data
       # 将主机 Codex Desktop 的 loopback local-access 端点映射到 Docker host gateway。
-      - CODEX_DOCKER_HOST=host.docker.internal
+      # - CODEX_DOCKER_HOST=host.docker.internal
     volumes:
       - ./data:/app/data
       - ./tiers.yaml:/app/tiers.yaml:ro
