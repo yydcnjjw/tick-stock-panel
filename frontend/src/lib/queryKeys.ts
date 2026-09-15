@@ -82,6 +82,7 @@ export const QK = {
   extPages:             ['ext-pages'] as const,
 
   // Kline
+  czscDaily:            (symbol: string) => ['czsc-daily', symbol, '1d', '1.0.1', 1000, 6, 50] as const,
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,

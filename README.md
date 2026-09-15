@@ -183,6 +183,11 @@
 
 > 📄 **19 个页面的完整功能细节**见 [docs/features.md](./docs/features.md) 与 [screenshots/](./screenshots/README.md) —— 上表之外, 回测四种研究视图、异动三时间线、页面插件运行时分发等都在其中。
 
+可选启用 [CZSC 日线辅助信号](./docs/czsc-signals.md)：6 个股票买卖辅助触发器，仅首次成立触发，支持次交易日开盘回测。
+
+启用后，可从个股详情底部进入 [CZSC 日线结构图](./docs/czsc-chart.md)，查看分型、笔、笔中枢、未完成结构及辅助信号记录。
+
+
 ---
 
 ## 📸 界面预览

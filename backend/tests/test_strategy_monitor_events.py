@@ -425,9 +425,10 @@ def test_quote_service_forwards_real_strategy_id(monkeypatch, tmp_path):
     subscriber = service.subscribe()
     service.set_app_state(SimpleNamespace(monitor_engine=_Engine(), repo=_Repo()))
     service._repo = _Repo()
-    service.get_enriched_today = lambda: (_quotes(), quote_service.cn_today())
+    current = _quotes().with_columns(pl.lit(int(quote_service.cn_now().timestamp() * 1000)).alias("quote_ts"))
+    service.get_enriched_today = lambda: (current, quote_service.cn_today())
 
     with patch.object(QuoteService, "_is_continuous_trading", return_value=True):
-        service._evaluate_monitors(pl.DataFrame(), None)
+        service._evaluate_monitors(current.select("symbol", "quote_ts"), None)
 
     assert subscriber.pop()["alerts"][0]["strategy_id"] == "demo"

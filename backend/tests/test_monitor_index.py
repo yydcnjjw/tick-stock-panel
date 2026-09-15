@@ -161,7 +161,7 @@ def test_evaluate_monitors_index_round_survives_empty_stock_snapshot():
 
 def test_evaluate_monitors_stock_round_runs_when_snapshot_ready():
     """股票快照就绪时, 股票轮正常执行 (回归确认未破坏原有行为)。"""
-    from datetime import date
+    from datetime import date, datetime
     from unittest.mock import MagicMock, patch
 
     import polars as pl
@@ -184,7 +184,13 @@ def test_evaluate_monitors_stock_round_runs_when_snapshot_ready():
 
     svc._repo.get_instruments.return_value = pl.DataFrame()
 
-    stock_df = pl.DataFrame({"symbol": ["600000.SH"], "close": [10.0], "rsi_14": [50.0]})
+    from app.market_time import CN_TZ
+
+    now = datetime(2026, 7, 28, 10, 30, tzinfo=CN_TZ)
+    stock_df = pl.DataFrame({
+        "symbol": ["600000.SH"], "close": [10.0], "rsi_14": [50.0],
+        "quote_ts": [int(now.timestamp() * 1000)],
+    })
 
     with (
         patch.object(QuoteService, "_is_continuous_trading", return_value=True),
@@ -193,8 +199,9 @@ def test_evaluate_monitors_stock_round_runs_when_snapshot_ready():
         patch.object(QuoteService, "_inject_intraday_signals",
                      side_effect=lambda df, e, at: df),
         patch("app.services.quote_service.cn_today", return_value=date(2026, 7, 28)),
+        patch("app.services.quote_service.cn_now", return_value=now),
     ):
-        svc._evaluate_monitors(pl.DataFrame(), None)
+        svc._evaluate_monitors(stock_df.select("symbol", "quote_ts"), None)
 
     # 股票轮正常执行
     stock_calls = [c for c in engine.evaluate.call_args_list
