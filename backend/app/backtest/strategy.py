@@ -44,6 +44,7 @@ from app.backtest.minute_replay import (
 )
 from app.backtest.minute_trigger import unsupported_minute_exit_signals
 from app.config import settings
+from app.indicators import czsc_signals
 from app.indicators.pipeline import (
     ENRICHED_STORAGE_COLS,
     INDICATOR_COLUMNS,
@@ -140,6 +141,11 @@ class StrategyDependencyResolver:
     ) -> ResolvedFeaturePlan:
         overrides = overrides or {}
         basic_filter = _basic_filter_for_asset(basic_filter, asset_type)
+        czsc_needed = czsc_signals.validate_usage(
+            [*entry_signals, *exit_signals, *strategy.required_features],
+            asset_type=asset_type,
+            execution_backend=strategy.execution_backend,
+        )
         if strategy.execution_backend == "matrix_native":
             return self._resolve_matrix_native(
                 strategy,
@@ -183,7 +189,7 @@ class StrategyDependencyResolver:
                 strategy.meta.get("id", "<unknown>"),
             )
             required_features.update(INDICATOR_COLUMNS)
-            required_signals.update(signal_dependencies)
+            required_signals.update(set(signal_dependencies) - czsc_signals.SIGNALS.keys())
             required_signals.update(LIMIT_SIGNAL_OUTPUTS)
 
         unknown_signals = required_signals - set(signal_dependencies) - set(LIMIT_SIGNAL_OUTPUTS)
@@ -208,7 +214,10 @@ class StrategyDependencyResolver:
         plan = FeaturePlan(
             required_features=frozenset(required_features),
             required_signals=frozenset(required_signals),
-            warmup_bars=max(60, int(strategy.lookback_days or 1), scoring_warmup_bars(scoring)),
+            warmup_bars=max(
+                60, int(strategy.lookback_days or 1), scoring_warmup_bars(scoring),
+                czsc_signals.WARMUP_BARS if czsc_needed else 0,
+            ),
         )
         return ResolvedFeaturePlan(
             base_columns=base_columns,
@@ -636,6 +645,7 @@ class BacktestResultPolicy:
             return stats
         diagnostic = {
             "error",
+            "czsc_coverage",
             "timing_ms",
             "execution",
             "selection",
@@ -1065,12 +1075,14 @@ class StrategyBacktestService:
         result_policy = result_policy or BacktestResultPolicy()
         # 因子归因快照容器: 日线路径在 _apply_score 里填充, 其余路径保持空
         factor_snapshot: dict = {}
+        czsc_diagnostics: dict = {}
 
         def _err(msg: str) -> StrategyBacktestResult:
             return StrategyBacktestResult(
                 run_id=run_id,
                 config=self._config_to_dict(config),
                 error=msg,
+                stats={"czsc_coverage": czsc_diagnostics} if czsc_diagnostics else {},
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
             )
 
@@ -1096,6 +1108,17 @@ class StrategyBacktestService:
         )
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
+        try:
+            czsc_signals.validate_usage(
+                [*entry_signals, *exit_signals, *s.required_features],
+                asset_type=config.asset_type, execution_backend=s.execution_backend,
+            )
+            if czsc_signals.selected([*entry_signals, *s.required_features]) and config.entry_fill != "open_t+1":
+                return _err("CZSC 日线入场信号在收盘后确认, 入场成交须选择次交易日开盘")
+            if czsc_signals.selected(exit_signals) and config.exit_fill != "open_t+1":
+                return _err("CZSC 日线出场信号在收盘后确认, 出场成交须选择次交易日开盘")
+        except ValueError as e:
+            return _err(str(e))
         if config.exit_fill == "signal_next_minute":
             if not config.minute_fill:
                 return _err("触发后下一分钟成交需要先开启分钟成交")
@@ -1293,6 +1316,11 @@ class StrategyBacktestService:
             timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
             if panel.is_empty():
                 return _err("无数据，请检查日期范围或先运行盘后管道")
+            if czsc_signals.selected(feature_plan.signal_columns):
+                czsc_diagnostics = czsc_signals.coverage(
+                    panel.filter(self._date_range_mask(panel, config.start, config.end)),
+                    feature_plan.signal_columns,
+                )
             # 环境过滤下正式起点=面板首日时顺延 (首日让渡为预热)
             if config.regime_filter:
                 date_labels = tuple(
@@ -1665,6 +1693,8 @@ class StrategyBacktestService:
         result.stats["full_feature_fallback"] = feature_plan.full_feature_fallback
         result.stats["execution_backend"] = s.execution_backend
         result.stats["selection"] = selection_stats
+        if czsc_diagnostics:
+            result.stats["czsc_coverage"] = czsc_diagnostics
         result.stats["shared_market_data"] = prepared is not None
         result.stats["matrix_data_cache_hit"] = matrix_data_cache_hit
         result.stats["matrix_data_cache_status"] = matrix_data_cache_status

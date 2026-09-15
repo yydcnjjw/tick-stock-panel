@@ -43,6 +43,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 日线结构辅助信号；按需加载，固定算法版本以保持历史结果可复现。
+czsc = ["czsc==1.0.1"]
+
 # Legacy CPU runtime: install the Polars compatibility kernel on
 # machines without AVX2/FMA support.
 # Enable with: uv sync --extra legacy-cpu

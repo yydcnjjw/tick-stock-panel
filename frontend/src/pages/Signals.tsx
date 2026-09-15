@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Lock, Plus, Settings2, Trash2, Zap } from 'lucide-react'
 import { api, type CustomSignal } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { BUILTIN_SIGNAL_DEFINITIONS, type SignalKind } from '@/lib/signals'
+import { BUILTIN_SIGNAL_DEFINITIONS, CZSC_SIGNAL_EXPLANATION, type SignalKind } from '@/lib/signals'
+import { useCustomSignalOptions } from '@/lib/useSharedQueries'
 import { CustomSignalDialog } from '@/components/signals/CustomSignalDialog'
 import { Skeleton } from '@/components/data/Skeleton'
 import { PageHeader } from '@/components/PageHeader'
@@ -26,7 +27,7 @@ export function Signals() {
 
   return (
     <div className="flex flex-col h-full">
-      <PageHeader title="信号库" subtitle="内置预计算信号与自定义条件信号, 供策略 / 回测 / 监控统一使用" />
+      <PageHeader title="信号库" subtitle="策略与回测共用信号定义；支持盘中计算的信号可用于监控" />
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto max-w-6xl">
           <SignalsBody highlight={highlight} />
@@ -39,7 +40,7 @@ export function Signals() {
 function SignalsBody({ highlight }: { highlight: string }) {
   const qc = useQueryClient()
   const list = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
-  const options = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions })
+  const options = useCustomSignalOptions()
 
   const [activeSection, setActiveSection] = useState<SignalSection>('custom')
   const [showForm, setShowForm] = useState(false)
@@ -103,7 +104,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
 
   const tabs = [
     { key: 'custom' as const, label: '自定义信号', count: signals.length, hint: `${enabledCustomSignals} 个已启用` },
-    { key: 'builtin' as const, label: '内置信号', count: BUILTIN_SIGNAL_DEFINITIONS.length, hint: '系统预计算，只读' },
+    { key: 'builtin' as const, label: '内置信号', count: BUILTIN_SIGNAL_DEFINITIONS.length, hint: '系统定义，只读' },
   ]
 
   return (
@@ -226,7 +227,17 @@ function SignalsBody({ highlight }: { highlight: string }) {
         <section className="rounded-card border border-border bg-surface p-4">
           <div className="mb-3 flex items-center gap-2 text-xs text-muted">
             <Lock className="h-3.5 w-3.5" />
-            系统在 enriched 数据中预计算，策略选择器直接展示，只读。
+            系统信号定义，只读。常规信号预计算，CZSC 信号按策略需要计算。
+          </div>
+          <div className="mb-4 space-y-2 rounded-btn border border-border bg-base p-3 text-xs leading-5">
+            <div className="font-medium text-foreground">CZSC 日线辅助信号 · 6 个定义</div>
+            <p className="text-secondary">{CZSC_SIGNAL_EXPLANATION}</p>
+            <p className="text-secondary">首版仅接入普通日线策略。引用 CZSC 信号的一侧最早在次交易日开盘成交，并遵循现有成交约束。不可计算时跳过对应信号并报告原因，不能当作未命中；暂不支持盘中监控。</p>
+            <div className={options.czscUnavailableReason ? 'text-warning' : 'text-accent'} role="status">
+              {options.czscUnavailableReason ?? `CZSC 可用 · 后端版本 ${options.data?.czsc?.version ?? '未提供'}`}
+              {options.czscUnavailableReason && '；定义仍可查看。'}
+              {options.isError && <button type="button" onClick={() => options.refetch()} className="ml-2 underline">重新检查</button>}
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {BUILTIN_SIGNAL_DEFINITIONS.map(sig => (
@@ -234,7 +245,7 @@ function SignalsBody({ highlight }: { highlight: string }) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h4 className="truncate text-sm font-medium text-foreground">{sig.name}</h4>
+                      <h4 className="text-sm font-medium text-foreground">{sig.name}</h4>
                       <span className={`rounded px-1.5 py-0.5 text-[10px] ${KIND_CLASS[sig.kind]}`}>
                         {KIND_LABEL[sig.kind]}
                       </span>

@@ -25,6 +25,8 @@ export interface BacktestTask {
   result: StrategyBacktestResult | null
   progress: BacktestProgress | null
   error: string | null
+  /** SSE 失败事件也可附带可计算性统计，不把失败伪装成成功结果。 */
+  errorStats?: StrategyBacktestResult['stats']
   /** 连接中断、正在有界重连中 (UI 显示"连接中断，重试中") */
   reconnecting: boolean
 }
@@ -81,12 +83,15 @@ async function connectSSE(url: string): Promise<void> {
     const probe = await fetch(url, { headers: { Accept: 'text/event-stream' } })
     if (!probe.ok) {
       let message = `回测请求失败 (${probe.status})`
+      let errorStats: StrategyBacktestResult['stats'] | undefined
       try {
-        message = (await probe.json())?.detail ?? message
+        const payload = await probe.json()
+        message = payload?.detail ?? message
+        errorStats = payload?.stats
       } catch { /* ignore */ }
       await probe.body?.cancel().catch(() => {})
       if (current?.id === id) {
-        current = { ...current, isPending: false, error: message, reconnecting: false }
+        current = { ...current, isPending: false, error: message, errorStats, reconnecting: false }
         emit()
         localStorage.removeItem(RECONNECT_KEY)
       }
@@ -144,8 +149,9 @@ async function connectSSE(url: string): Promise<void> {
     // SSE error 事件: 有 data 说明是后端主动推送的错误/取消; 无 data 说明是连接断开
     if (e.data) {
       try {
-        const msg = JSON.parse(e.data)?.message ?? '回测出错'
-        current = { ...current, isPending: false, error: msg, reconnecting: false }
+        const payload = JSON.parse(e.data)
+        const msg = payload?.message ?? '回测出错'
+        current = { ...current, isPending: false, error: msg, errorStats: payload?.stats, reconnecting: false }
         emit()
       } catch {
         current = { ...current, isPending: false, error: '回测出错', reconnecting: false }

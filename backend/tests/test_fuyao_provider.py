@@ -99,7 +99,7 @@ def _provider_with(monkeypatch, pages, count=None, error=None, **fake_kwargs):
 
 def test_snapshot_units_and_field_mapping(monkeypatch):
     """核心口径: price_change_ratio_pct 百分数 → change_pct 小数制 (1.72 → 0.0172)。"""
-    provider, _ = _provider_with(monkeypatch, [[_row()]])
+    provider, _ = _provider_with(monkeypatch, [[_row()]], server_ts=1787542612000)
     records = provider.get_realtime()
     assert len(records) == 1
     r = records[0]
@@ -232,9 +232,9 @@ def test_realtime_uses_server_timestamp(monkeypatch):
     assert provider.get_realtime()[0]["timestamp"] == 1787542612000
 
 
-def test_realtime_falls_back_to_local_time_without_server_ts(monkeypatch):
+def test_realtime_missing_source_timestamp_stays_unknown(monkeypatch):
     provider, _ = _provider_with(monkeypatch, [[_row()]], server_ts=0)
-    assert provider.get_realtime()[0]["timestamp"] > 0
+    assert provider.get_realtime()[0]["timestamp"] is None
 
 
 # ---- 分页 ----
@@ -324,6 +324,11 @@ def test_realtime_indices_error_returns_none(monkeypatch):
         monkeypatch, error=fc.FuyaoError("扶摇接口错误 code=1002: Unknown thscode")
     )
     assert provider.get_realtime_indices(["000001.SH"]) is None
+
+
+def test_realtime_indices_missing_source_timestamp_stays_unknown(monkeypatch):
+    provider, _ = _index_provider_with(monkeypatch, rows=[_row("000001.SH")], server_ts=0)
+    assert provider.get_realtime_indices(["000001.SH"])[0]["timestamp"] is None
 
 
 def test_client_requires_api_key():

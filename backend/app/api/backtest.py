@@ -660,7 +660,11 @@ async def strategy_stream(
                         if error == "cancelled":
                             yield f"event: error\ndata: {json.dumps({'message': '回测已取消'}, ensure_ascii=False)}\n\n"
                         elif error:
-                            yield f"event: error\ndata: {json.dumps({'message': error}, ensure_ascii=False)}\n\n"
+                            payload = {"message": error}
+                            stats = r.get("stats", {}) if isinstance(r, dict) else getattr(r, "stats", {})
+                            if stats.get("czsc_coverage"):
+                                payload["stats"] = {"czsc_coverage": stats["czsc_coverage"]}
+                            yield f"event: error\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                         else:
                             payload = r if isinstance(r, dict) else asdict(r)
                             yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"

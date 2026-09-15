@@ -199,10 +199,11 @@ def test_quote_service_notifies_only_after_strategy_result_update():
     service = QuoteService()
     subscriber = service.subscribe()
     service.set_app_state(SimpleNamespace(monitor_engine=_MonitorWithUpdate(updated=True)))
-    service.get_enriched_today = lambda: (_quote_df(), quote_service.cn_today())
+    current = _quote_df().with_columns(pl.lit(int(quote_service.cn_now().timestamp() * 1000)).alias("quote_ts"))
+    service.get_enriched_today = lambda: (current, quote_service.cn_today())
 
     with patch.object(QuoteService, "_is_continuous_trading", return_value=True):
-        service._evaluate_monitors(pl.DataFrame(), None)
+        service._evaluate_monitors(current.select("symbol", "quote_ts"), None)
 
     assert subscriber.pop()["strategy_results_updated"] is True
 
@@ -211,9 +212,10 @@ def test_quote_service_skips_notification_without_strategy_result_update():
     service = QuoteService()
     subscriber = service.subscribe()
     service.set_app_state(SimpleNamespace(monitor_engine=_MonitorWithUpdate(updated=False)))
-    service.get_enriched_today = lambda: (_quote_df(), quote_service.cn_today())
+    current = _quote_df().with_columns(pl.lit(int(quote_service.cn_now().timestamp() * 1000)).alias("quote_ts"))
+    service.get_enriched_today = lambda: (current, quote_service.cn_today())
 
     with patch.object(QuoteService, "_is_continuous_trading", return_value=True):
-        service._evaluate_monitors(pl.DataFrame(), None)
+        service._evaluate_monitors(current.select("symbol", "quote_ts"), None)
 
     assert subscriber.pop()["strategy_results_updated"] is False

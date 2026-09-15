@@ -75,6 +75,7 @@ class AIGenerateRequest(BaseModel):
 def get_options():
     """返回可选字段与运算符，供前端下拉框使用。"""
     # 字段带中文标签（取自 ENRICHED_COLUMNS，回退为字段名本身）
+    from app.indicators.czsc_signals import availability
     from app.indicators.pipeline import ENRICHED_COLUMNS, ENRICHED_COLUMNS_BY_CATEGORY
 
     allowed = custom_signals.ALLOWED_FIELDS
@@ -131,6 +132,7 @@ def get_options():
         fields.extend(str_entries)
 
     return {
+        "czsc": availability(),
         "fields": fields,
         "groups": groups,
         "maxDays": custom_signals.MAX_DAYS,

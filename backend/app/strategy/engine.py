@@ -22,6 +22,7 @@ import numpy as np
 import polars as pl
 
 from app.config import settings
+from app.indicators import czsc_signals
 from app.strategy.scoring import (
     SCORING_DIRECTION_LOW,
     effective_scoring,
@@ -222,6 +223,7 @@ class StrategyResult:
     scores: dict[str, float] = field(default_factory=dict)
     entry_signal_hits: list[dict] = field(default_factory=list)
     exit_signal_hits: list[dict] = field(default_factory=list)
+    czsc_coverage: dict | None = None
 
 
 @dataclass
@@ -722,6 +724,12 @@ class StrategyEngine:
         for strategy_id in strategy_ids:
             strategy = self.get(strategy_id)
             overrides = overrides_map.get(strategy_id) or {}
+            if czsc_signals.selected([
+                *self._effective_signals(overrides, "entry_signals", strategy.entry_signals),
+                *self._effective_signals(overrides, "exit_signals", strategy.exit_signals),
+                *strategy.required_features,
+            ]):
+                required = max(required, czsc_signals.WARMUP_BARS + 1)
             scoring = effective_scoring(strategy.meta.get("scoring"), overrides)
             required = max(required, scoring_warmup_bars(scoring))
             if strategy.execution_backend == "matrix_native":
@@ -900,6 +908,12 @@ class StrategyEngine:
         params = self.resolve_params(s, params, overrides)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
+        czsc_needed = czsc_signals.validate_usage(
+            [*entry_signals, *exit_signals, *s.required_features],
+            asset_type=context.asset_type, execution_backend=s.execution_backend,
+        )
+        if czsc_needed and context.timeframe != "1d":
+            raise ValueError("CZSC 辅助信号仅支持日线")
 
         if s.execution_backend == "matrix_native":
             return self._run_matrix_strategy(
@@ -931,6 +945,30 @@ class StrategyEngine:
             context.history,
             scoring,
         )
+        czsc_diagnostics = None
+        if czsc_needed:
+            if history is None or history.is_empty():
+                raise ValueError("CZSC 辅助信号缺少日线历史, 请先同步历史数据")
+            source = history.filter(pl.col("date") <= as_of)
+            if pool:
+                source = source.filter(pl.col("symbol").is_in(pool))
+            history = czsc_signals.compute(source, czsc_needed)
+            today_signals = history.filter(pl.col("date") == as_of)
+            signal_columns = sorted(czsc_needed) + [czsc_signals.reason_column(n) for n in sorted(czsc_needed)]
+            if current is not None:
+                if pool:
+                    current = current.filter(pl.col("symbol").is_in(pool))
+                current = current.drop([c for c in signal_columns if c in current.columns]).join(
+                    today_signals.select("symbol", "date", *signal_columns),
+                    on=["symbol", "date"], how="left",
+                ).with_columns([
+                    pl.col(czsc_signals.reason_column(n)).fill_null(
+                        pl.when(pl.col(n).is_null()).then(pl.lit("missing_data"))
+                    ) for n in czsc_needed
+                ])
+                czsc_diagnostics = czsc_signals.coverage(current.filter(pl.col("date") == as_of), czsc_needed)
+            else:
+                czsc_diagnostics = czsc_signals.coverage(today_signals, czsc_needed)
 
         signal_df = current if current is not None else history
         if signal_df is None:
@@ -952,6 +990,7 @@ class StrategyEngine:
                     as_of=as_of,
                     strategy_id=strategy_id,
                     exit_signal_hits=exit_signal_hits,
+                    czsc_coverage=czsc_diagnostics,
                 )
             # 盘中信号列注入(csgi_): 实盘扫描与分钟回测共用本路径 — 与监控评估
             # 同一特征构造器, 单点注入保证三处口径一致。
@@ -983,6 +1022,7 @@ class StrategyEngine:
                     as_of=as_of,
                     strategy_id=strategy_id,
                     exit_signal_hits=exit_signal_hits,
+                    czsc_coverage=czsc_diagnostics,
                 )
             # 自定义信号前置校验: REQUIRED_FEATURES 引用的 csg_ 列未注入时,
             # 给出明确指引, 而不是让策略代码抛 polars 缺列错 (500)。
@@ -1019,6 +1059,7 @@ class StrategyEngine:
                 as_of=as_of,
                 strategy_id=strategy_id,
                 exit_signal_hits=exit_signal_hits,
+                czsc_coverage=czsc_diagnostics,
             )
 
         # 基础过滤: 策略默认 basic_filter 兜底, 用户 override 优先覆盖。
@@ -1081,6 +1122,7 @@ class StrategyEngine:
             scores=scores,
             entry_signal_hits=entry_signal_hits,
             exit_signal_hits=exit_signal_hits,
+            czsc_coverage=czsc_diagnostics,
         )
 
     @staticmethod

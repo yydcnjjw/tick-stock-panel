@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 import polars as pl
 
+from app.indicators import czsc_signals
 from app.market_time import cn_today
 from app.strategy import config as _strategy_config
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
@@ -29,6 +30,24 @@ from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_
 from app.strategy.monitor_rules import date_rule_in_window
 
 logger = logging.getLogger(__name__)
+
+
+def czsc_strategy_monitor_warning(strategy, overrides: dict | None = None) -> str | None:
+    """只检查生效依赖, 不加载 CZSC 原生组件或计算日线信号。"""
+    from app.strategy.engine import StrategyEngine
+
+    names = list(getattr(strategy, "required_features", ()) or ())
+    for key in ("entry_signals", "exit_signals"):
+        names.extend(StrategyEngine._effective_signals(
+            overrides or {}, key, getattr(strategy, key, []),
+        ))
+    try:
+        if czsc_signals.selected(names):
+            return czsc_signals.MONITOR_WARNING
+    except ValueError as exc:
+        return str(exc)
+    return None
+
 
 # 信号 / 字段中文名映射 — 与前端 lib/signals.ts 对齐, 用于告警 message / 推送文案。
 # signal_* 为内置原子信号, 其余为技术指标/行情字段。
@@ -397,8 +416,44 @@ class MonitorRuleEngine:
     def set_sector_monitor_service(self, service) -> None:
         self._sector_monitor_service = service
 
-    def invalidate_strategy_state(self) -> None:
-        """策略注册表变更后清除选股池、结果和矩阵快照。"""
+    def invalidate_strategy_state(self, strategy_id: str | None = None) -> None:
+        """指定 ID 时仅清该策略状态; 无参仍用于注册表整体失效。"""
+        if strategy_id is not None:
+            rule_ids = {
+                rule_id for rule_id, rule in list(self._rules.items())
+                if rule.get("type") == "strategy" and rule.get("strategy_id") == strategy_id
+            }
+            for state in (
+                self._strategy_pools, self._strategy_signal_state, self._strategy_signal_seen,
+            ):
+                rule_ids.update(key[0] for key in list(state) if key[1] == strategy_id)
+            self._last_fire = {
+                key: value for key, value in list(self._last_fire.items()) if key[0] not in rule_ids
+            }
+            self._strategy_pools = {
+                key: value for key, value in list(self._strategy_pools.items())
+                if key[1] != strategy_id
+            }
+            self._strategy_signal_state = {
+                key: value for key, value in list(self._strategy_signal_state.items())
+                if key[1] != strategy_id
+            }
+            self._strategy_signal_seen = {
+                key: value for key, value in list(self._strategy_signal_seen.items())
+                if key[1] != strategy_id
+            }
+            # 发布新快照, 避免并发读方拿到的旧字典在迭代中被修改。
+            self._latest_strategy_results = {
+                key: value for key, value in self._latest_strategy_results.items()
+                if key != strategy_id
+            }
+            self._building_strategy_results = {
+                key: value for key, value in self._building_strategy_results.items()
+                if key != strategy_id
+            }
+            self._latest_strategy_result_ids.discard(strategy_id)
+            # 活跃矩阵是按资产共享的基础行情快照, 不清除其他策略本轮仍需的输入。
+            return
         self._strategy_pools.clear()
         self._strategy_signal_state.clear()
         self._strategy_signal_seen.clear()
@@ -406,6 +461,18 @@ class MonitorRuleEngine:
         self._building_strategy_results = {}
         self._latest_strategy_result_ids.clear()
         self._active_matrix_snapshots.clear()
+
+    def _clear_czsc_rule_state(self, rule: dict) -> None:
+        """覆盖配置变更可使历史规则失效; 移除旧基线及其策略实时结果。"""
+        sid = rule["strategy_id"]
+        had_result = (
+            sid in self._latest_strategy_results
+            or sid in self._building_strategy_results
+            or sid in self._latest_strategy_result_ids
+        )
+        self.invalidate_strategy_state(strategy_id=sid)
+        if had_result:
+            self._latest_strategy_result_ids.add(sid)
 
     def set_history_loader(self, fn) -> None:
         """注入历史窗口加载器, 用于声明 filter_history 的策略跑实时监控。
@@ -612,7 +679,7 @@ class MonitorRuleEngine:
         Returns:
             触发的 AlertEvent dict 列表 (含 ts/rule_id/source/type/symbol/...)
         """
-        if not self._rules or df.is_empty():
+        if not self._rules:
             return []
 
         now = time.time()
@@ -621,11 +688,12 @@ class MonitorRuleEngine:
         # _latest_strategy_results。这样 /cached 并发读取永远拿到完整结果,
         # 不会在「清空 → 逐个回填」窗口里读到空中间态 (曾导致策略页闪烁)。
         # 非 reset 轮 (ETF 轮) 继续往同一临时容器追加 (_match_strategy 仅写 stock, 实际不追加)。
-        if reset_strategy_results:
+        if reset_strategy_results and not df.is_empty():
             self._building_strategy_results = {}
             self._latest_strategy_result_ids.clear()
 
         matrix_rules: list[dict] = []
+        blocked_rule_ids: set[str] = set()
         params_map: dict[str, dict] = {}
         overrides_map: dict[str, dict] = {}
         if self._strategy_engine is not None:
@@ -643,14 +711,26 @@ class MonitorRuleEngine:
                     strategy = self._strategy_engine.get(sid)
                 except Exception:
                     continue
-                if getattr(strategy, "execution_backend", "polars_expr") != "matrix_native":
-                    continue
                 overrides = {}
                 if self._data_dir:
                     overrides = _strategy_config.load_override(self._data_dir, sid)
+                warning = czsc_strategy_monitor_warning(strategy, overrides)
+                if warning:
+                    self._clear_czsc_rule_state(rule)
+                    blocked_rule_ids.add(rule["id"])
+                    logger.debug("策略 %s 跳过盘中监控: %s", sid, warning)
+                    continue
+                if (
+                    df.is_empty()
+                    or getattr(strategy, "execution_backend", "polars_expr") != "matrix_native"
+                ):
+                    continue
                 matrix_rules.append(rule)
                 overrides_map[sid] = overrides
                 params_map[sid] = dict(overrides.get("params") or {})
+        # 即使没有行情或规则作用域为空, 也先清理已经失效的策略基线和结果。
+        if df.is_empty():
+            return []
         if matrix_rules:
             try:
                 history_loader = self._history_loader_for(matrix_rules[0])
@@ -702,6 +782,8 @@ class MonitorRuleEngine:
         # list() 快照: 本方法跑在行情轮询线程, API 线程同时 add/remove 规则
         # 会触发 "dictionary changed size during iteration", 整轮告警丢失
         for rule_id, rule in list(self._rules.items()):
+            if rule_id in blocked_rule_ids:
+                continue
             if rule.get("asset_type", "stock") != asset_type:
                 continue
             if rule.get("type") in ("sector", "abnormal", "date"):
@@ -1221,6 +1303,13 @@ class MonitorRuleEngine:
                 overrides = _strategy_config.load_override(self._data_dir, sid)
             except Exception:
                 pass
+
+        # 复查本次 run 将使用的覆盖值, 避免预检后配置发生变化时误用盘中数据。
+        warning = czsc_strategy_monitor_warning(s, overrides)
+        if warning:
+            self._clear_czsc_rule_state(rule)
+            logger.debug("策略 %s 跳过盘中监控: %s", sid, warning)
+            return []
 
         # 声明 filter_history 的策略 (如反包) 需要多日历史窗口才能判定形态。
         # 旧实现因"实时监控不支持 history loader"直接跳过 → 反包等策略盘中永不触发。

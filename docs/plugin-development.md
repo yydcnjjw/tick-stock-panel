@@ -267,9 +267,13 @@ provider 不应自行切换或回退到其他数据源。
 | `amount` | 建议 | 成交额(元) |
 | `change_pct` | 建议 | **小数制**; 缺失时下游按 change_amount/prev_close 推导 |
 | `change_amount` | 建议 | 涨跌额(元) |
-| `timestamp` | 建议 | 毫秒; 优先用服务端时间(行情归属), 缺失退本地时间 |
+| `timestamp` | 股票告警必需 | 源报价或源快照的 Unix 毫秒时间; 缺失保持 `None`, 不得用本地抓取时间补造 |
 | `name` | 可选 | 快照无名称时置 None, 下游用标的维表关联 |
 | `amplitude` / `turnover_rate` / `session` | 可选 | 缺失置 None, 不启发式伪造; turnover_rate 入口为小数制 |
+
+股票监控只评估与本轮输入时间戳一致、源快照时间不晚于当前时间且不超过 120 秒的记录。
+缺失时间戳、旧快照或 enriched 更新失败留下的旧缓存不会触发股票规则。
+扶摇当前提供整批快照时间, 不提供逐股最后成交时间; 该检查不能证明逐笔成交时效。
 
 ### config.datasets 的作用
 

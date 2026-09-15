@@ -198,6 +198,7 @@ def get_enriched_generation(
     asset_type: str = "stock",
     *,
     initialize: bool = True,
+    recover: bool = True,
 ) -> str:
     path = _marker_path(data_dir, asset_type)
     payload = _read_marker(path)
@@ -208,7 +209,7 @@ def get_enriched_generation(
             )
     elif _is_ready_payload(payload):
         return payload["generation"]
-    elif not _orphaned_publishing_claim(payload):
+    elif not recover or not _orphaned_publishing_claim(payload):
         # 发布仍在推进, 或为同进程异常遗留 (无法证明属主已死): 读取保持 fail-closed。
         raise EnrichedGenerationUnavailableError(
             "enriched data is being published; retry after the update finishes"

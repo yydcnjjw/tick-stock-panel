@@ -10,8 +10,11 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.indicators import czsc_signals
+from app.strategy import config as strategy_config
 from app.strategy import monitor_rules
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
+from app.strategy.monitor import czsc_strategy_monitor_warning
 
 router = APIRouter(prefix="/api/monitor-rules", tags=["monitor-rules"])
 
@@ -134,7 +137,7 @@ def get_options(request: Request):
     builtin_signals = [
         {"key": k, "label": v}
         for k, v in ENRICHED_COLUMNS.items()
-        if k.startswith("signal_")
+        if k.startswith("signal_") and k not in czsc_signals.SIGNALS
     ]
     builtin_signals.extend(
         {"key": key, "label": label}
@@ -252,6 +255,21 @@ def list_rules(request: Request):
                     rule["runtime_warning"] = "绑定的自选分组已删除, 规则已暂停监控, 编辑可重新选择"
         except Exception:  # noqa: BLE001
             pass
+    strategy_engine = getattr(request.app.state, "strategy_engine", None)
+    if strategy_engine is not None:
+        for rule in rules:
+            if rule.get("type") != "strategy":
+                continue
+            sid = str(rule.get("strategy_id") or "")
+            try:
+                strategy = strategy_engine.get(sid)
+            except (ValueError, KeyError):
+                continue
+            warning = czsc_strategy_monitor_warning(
+                strategy, strategy_config.load_override(_data_dir(request), sid),
+            )
+            if warning:
+                rule["runtime_warning"] = warning
     # 按 created_at 倒序
     rules.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     return {"rules": rules}
@@ -299,6 +317,18 @@ def save_rule(req: RuleModel, request: Request):
         rule["created_at"] = existing["created_at"]
     try:
         monitor_rules.validate(rule)
+        if rule.get("type") == "strategy":
+            # 历史规则仍可停用; 新建或保存为启用状态时必须拒绝不受支持的依赖。
+            if existing is None or rule.get("enabled", True):
+                warning = czsc_strategy_monitor_warning(
+                    strategy,
+                    strategy_config.load_override(_data_dir(request), str(rule["strategy_id"])),
+                )
+                if warning:
+                    raise ValueError(warning)
+        elif czsc_signals.selected(c.get("field") for c in rule.get("conditions", [])):
+            # truth 条件的既有校验只认 signal_ 前缀, 不能阻止日线 CZSC 信号。
+            raise ValueError(czsc_signals.MONITOR_WARNING)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if rule.get("scope") == "watchlist_group":

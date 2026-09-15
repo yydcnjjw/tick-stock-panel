@@ -19,11 +19,11 @@ import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
-import { cnSignal } from '@/lib/signals'
+import { cnSignal, czscStrategyUnsupportedReason, isCzscSignal } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
-import { useDataStatus, useCapabilities } from '@/lib/useSharedQueries'
+import { useDataStatus, useCapabilities, useCustomSignalOptions } from '@/lib/useSharedQueries'
 import { EmptyState } from '@/components/EmptyState'
 import { WarmupBadge } from '@/components/WarmupBadge'
 import { DatePicker } from '@/components/DatePicker'
@@ -32,6 +32,7 @@ import { StrategyNavChart } from './charts/StrategyNavChart'
 import { ReturnDistributionChart } from './charts/ReturnDistributionChart'
 import { TradeKlineModal } from './components/TradeKlineModal'
 import { PicksSymbolKlineModal } from './components/PicksSymbolKlineModal'
+import { CzscCoverageSummary } from './components/CzscCoverageSummary'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { WatchlistGroupMenu } from '@/components/WatchlistAddMenu'
 import { ScoringEditor } from '@/components/ScoringEditor'
@@ -1190,6 +1191,10 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
 
   const handleRun = () => {
     if (!selectedStrategy || backtestDataUnavailable) return
+    if (czscRunErrors.length > 0) {
+      toast(czscRunErrors.join('；'), 'error')
+      return
+    }
     const requestOverrides = detail
       ? normalizeStrategyOverrides(detail, overrides)
       : overrides
@@ -1459,12 +1464,26 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   const basicFilter = (overrides.basic_filter ?? {}) as Record<string, any>
   const entrySignals = (overrides.entry_signals ?? []) as string[]
   const exitSignals = (overrides.exit_signals ?? []) as string[]
+  const effectiveEntrySignals = (overrides.entry_signals ?? detail?.entry_signals ?? []) as string[]
   const effectiveExitSignals = (overrides.exit_signals ?? detail?.exit_signals ?? []) as string[]
   const minuteTriggerSignals = detail?.minute_exit_trigger_supported_signals ?? []
   const unsupportedMinuteExitSignals = effectiveExitSignals.filter(signal => !minuteTriggerSignals.includes(signal))
   const minuteExitTriggerSupported = effectiveExitSignals.length > 0 && unsupportedMinuteExitSignals.length === 0
   // 分钟策略: 入场在盘中触发分钟成交, 日线专属的成交口径选项不适用
   const isMinuteStrategy = detail?.execution_backend === 'minute_filter'
+  const czscOptions = useCustomSignalOptions()
+  const hasCzscCodeDependency = (detail?.required_features ?? []).some(isCzscSignal)
+  const hasCzscEntry = effectiveEntrySignals.some(isCzscSignal) || hasCzscCodeDependency
+  const hasCzscExit = effectiveExitSignals.some(isCzscSignal)
+  const hasCzsc = hasCzscEntry || hasCzscExit
+  const czscFillMismatch = (hasCzscEntry && entryFill !== 'open_t+1') || (hasCzscExit && exitFill !== 'open_t+1')
+  const czscRunErrors = hasCzsc ? [
+    assetType !== 'stock' ? 'CZSC 仅支持 A 股股票，不支持 ETF' : null,
+    czscStrategyUnsupportedReason(detail?.execution_backend),
+    czscOptions.czscUnavailableReason,
+    hasCzscEntry && entryFill !== 'open_t+1' ? 'CZSC 入场侧须使用次交易日开盘成交' : null,
+    hasCzscExit && exitFill !== 'open_t+1' ? 'CZSC 出场侧须使用次交易日开盘成交' : null,
+  ].filter((reason): reason is string => !!reason) : []
   const { data: minuteDataStatus } = useQuery({
     queryKey: QK.dataStatus,
     queryFn: api.dataStatus,
@@ -1936,6 +1955,22 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
           </div>
         )}
 
+        {hasCzsc && (
+          <div className={`rounded-btn border px-3 py-2 text-[11px] leading-5 ${czscRunErrors.length ? 'border-warning/30 bg-warning/10 text-warning' : 'border-border text-muted'}`} role="status">
+            <p>CZSC 使用已收盘日线，引用侧最早次交易日开盘成交。</p>
+            {hasCzscCodeDependency && <p>策略代码依赖 CZSC，移除界面触发器不会解除依赖；入场侧仍须次交易日开盘成交。</p>}
+            {czscRunErrors.map(reason => <p key={reason}>{reason}</p>)}
+            {czscFillMismatch && (
+              <button type="button" className="mt-1 underline" onClick={() => {
+                if (hasCzscEntry) setEntryFill('open_t+1')
+                if (hasCzscExit) setExitFill('open_t+1')
+                toast('CZSC 引用侧已设为次交易日开盘成交', 'success')
+              }}>将 CZSC 引用侧设为次日开盘</button>
+            )}
+            {czscOptions.isError && <button type="button" onClick={() => czscOptions.refetch()} className="ml-2 underline">重新检查可用性</button>}
+          </div>
+        )}
+
         {isPending ? (
           <button
             onClick={stopBacktest}
@@ -1949,7 +1984,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
         ) : (
           <button
             onClick={handleRun}
-            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable}
+            disabled={!selectedStrategy || strategyDetail.isLoading || backtestDataUnavailable || czscRunErrors.length > 0}
             className="group w-full inline-flex items-center justify-center gap-2.5 rounded-btn border border-accent/40
               bg-gradient-to-r from-accent to-blue-500 px-3 py-2.5 text-white shadow-[0_10px_24px_rgba(59,130,246,0.22)]
               transition-all duration-150 ease-smooth hover:-translate-y-0.5 hover:shadow-[0_14px_28px_rgba(59,130,246,0.28)]
@@ -2089,6 +2124,8 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
             )}
           </div>
         )}
+
+        <CzscCoverageSummary coverage={backtestTask?.error ? backtestTask.errorStats?.czsc_coverage : result?.stats?.czsc_coverage} />
 
         {!result && !isPending && (
           <EmptyState
@@ -2901,6 +2938,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                     signals={entrySignals}
                     onChange={next => updateOverride('entry_signals', next)}
                     kind="entry"
+                    options={{ assetType, context: 'backtest', executionBackend: detail.execution_backend }}
                   />
                 </ConfigSection>
               )}
@@ -2915,6 +2953,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                     signals={exitSignals}
                     onChange={next => updateOverride('exit_signals', next)}
                     kind="exit"
+                    options={{ assetType, context: 'backtest', executionBackend: detail.execution_backend }}
                   />
                 </ConfigSection>
               )}

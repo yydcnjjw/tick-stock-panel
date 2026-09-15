@@ -1,9 +1,10 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { PenLine } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, type StrategyDetail } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
-import { SIGNAL_OPTIONS, cnSignal } from '@/lib/signals'
+import { CZSC_MONITOR_UNSUPPORTED, CZSC_SIGNAL_DEFINITIONS, SIGNAL_OPTIONS, cnSignal, czscStrategyUnsupportedReason, isCzscSignal, normalizeCzscSignalId } from '@/lib/signals'
+import { useCustomSignalOptions } from '@/lib/useSharedQueries'
 
 /** 展示与过滤可选项 (全部可选, 有默认值) */
 interface SignalPickerOptions {
@@ -12,6 +13,9 @@ interface SignalPickerOptions {
   builtinSignals?: { key: string; label: string }[]
   disabledSignals?: string[]
   disabledSignalHint?: string
+  assetType?: 'stock' | 'etf' | 'index'
+  context?: 'strategy' | 'backtest' | 'monitor'
+  executionBackend?: StrategyDetail['execution_backend']
   /**
    * 是否按 kind 过滤自定义信号 (csg_*)。默认 true (选股/回测: 入场区只显示 entry)。
    * 监控规则页设 false: 报警语义是"命中即报", 不分入场出场, 自定义信号全部显示
@@ -38,8 +42,18 @@ interface Props {
  * - entry 蓝色主题, exit 橙色主题; 自定义信号边框配色与内置一致, 右上角 PenLine 角标区分
  */
 export function SignalPicker({ signals, onChange, kind, options }: Props) {
-  const { variant = 'panel', builtinSignals, disabledSignals = [], disabledSignalHint, filterCustomByKind = true } = options ?? {}
+  const {
+    variant = 'panel', builtinSignals, disabledSignals = [], disabledSignalHint,
+    filterCustomByKind = true, assetType = 'stock', context = 'strategy', executionBackend,
+  } = options ?? {}
   const customSignalsQuery = useQuery({ queryKey: QK.customSignals, queryFn: api.customSignalsList })
+  const signalOptions = useCustomSignalOptions()
+  const czscDisabledReason = [
+    context === 'monitor' ? CZSC_MONITOR_UNSUPPORTED : null,
+    assetType !== 'stock' ? 'CZSC 仅支持 A 股股票，不支持 ETF 或指数' : null,
+    czscStrategyUnsupportedReason(executionBackend),
+    signalOptions.czscUnavailableReason,
+  ].filter(Boolean).join('；')
 
   const customOptions = useMemo(() => {
     const list = (customSignalsQuery.data?.signals ?? [])
@@ -49,8 +63,10 @@ export function SignalPicker({ signals, onChange, kind, options }: Props) {
     return { list, names }
   }, [customSignalsQuery.data, kind, filterCustomByKind])
 
+  const selectedIds = new Set(signals.map(normalizeCzscSignalId))
+  const disabledIds = new Set(disabledSignals.map(normalizeCzscSignalId))
   const toggle = (sig: string) => {
-    const next = signals.includes(sig) ? signals.filter(x => x !== sig) : [...signals, sig]
+    const next = selectedIds.has(sig) ? signals.filter(x => normalizeCzscSignalId(x) !== sig) : [...signals, sig]
     onChange(next)
   }
 
@@ -66,20 +82,31 @@ export function SignalPicker({ signals, onChange, kind, options }: Props) {
   const btnCls = variant === 'dialog'
     ? 'rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors cursor-pointer'
     : 'rounded-btn border px-2.5 py-1.5 text-[11px] transition-colors cursor-pointer'
-  const builtinOptions = builtinSignals ?? SIGNAL_OPTIONS.map(key => ({ key, label: cnSignal(key) }))
+  const builtinOptions = (builtinSignals ?? SIGNAL_OPTIONS.map(key => ({ key, label: cnSignal(key) })))
+    .map(option => ({ ...option, key: normalizeCzscSignalId(option.key) }))
+  // 场景过滤后仍保留已选 CZSC，便于修复旧配置。
+  const visibleBuiltinOptions = [...builtinOptions, ...CZSC_SIGNAL_DEFINITIONS
+    .filter(sig => selectedIds.has(sig.id) && !builtinOptions.some(option => option.key === sig.id))
+    .map(sig => ({ key: sig.id, label: sig.name }))]
+  const showsCzsc = visibleBuiltinOptions.some(option => isCzscSignal(option.key))
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      {builtinOptions.map(option => {
-        const disabled = disabledSignals.includes(option.key) && !signals.includes(option.key)
+      {visibleBuiltinOptions.map(option => {
+        const selected = selectedIds.has(option.key)
+        const hint = isCzscSignal(option.key) && czscDisabledReason
+          ? czscDisabledReason
+          : disabledIds.has(option.key) ? disabledSignalHint : undefined
+        const disabled = !selected && (disabledIds.has(option.key) || (isCzscSignal(option.key) && !!czscDisabledReason))
         return (
           <button
             key={option.key}
             type="button"
             disabled={disabled}
-            title={disabled ? disabledSignalHint : undefined}
+            aria-pressed={selected}
+            title={hint ? `${hint}${selected ? '；点击移除' : ''}` : undefined}
             onClick={() => toggle(option.key)}
-            className={`${btnCls} ${signals.includes(option.key) ? active : idle} disabled:cursor-not-allowed disabled:opacity-40`}
+            className={`${btnCls} ${selected ? active : idle} disabled:cursor-not-allowed disabled:opacity-40`}
           >
             {option.label}
           </button>
@@ -102,6 +129,16 @@ export function SignalPicker({ signals, onChange, kind, options }: Props) {
           </button>
         )
       })}
+      {showsCzsc && (
+        <div className={`w-full text-[10px] leading-4 ${czscDisabledReason ? 'text-warning' : 'text-muted'}`} role="status">
+          {czscDisabledReason
+            ? `${czscDisabledReason}。已选 CZSC 项仍可点击移除。`
+            : 'CZSC 辅助信号仅在已收盘日线由不成立变为成立时触发；首次可计算只建基线，引用侧最早次交易日开盘成交，暂不支持盘中监控。'}
+          {signalOptions.isError && (
+            <button type="button" onClick={() => signalOptions.refetch()} className="ml-1 underline">重新检查</button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -257,7 +257,7 @@ def _dump_date_range(path: Path) -> tuple[date | None, date | None]:
     return row["dmin"][0], row["dmax"][0]
 
 
-def _map_snapshot_row(row: dict, fetched_ms: int, *, volume_to_hand: bool = True) -> dict | None:
+def _map_snapshot_row(row: dict, fetched_ms: int | None, *, volume_to_hand: bool = True) -> dict | None:
     """扶摇快照行 → 内部 realtime record。字段缺失时按依赖推导, 不伪造数据。
 
     实测字段(2026-08): high_price / low_price / prev_price;
@@ -390,8 +390,8 @@ class FuyaoProvider:
             logger.warning("扶摇实时行情拉取失败: %s", e)
             return []
 
-        # 优先用服务端时间戳(行情归属); 缺失时退回本地时间
-        fetched_ms = server_ts or int(time.time() * 1000)
+        # 源只提供整批快照时间。缺失时保持未知, 不能以本地抓取时间伪装新行情。
+        fetched_ms = server_ts or None
 
         records = []
         dropped = 0
@@ -424,7 +424,7 @@ class FuyaoProvider:
             logger.warning("扶摇指数行情拉取失败: %s", e)
             return None
 
-        fetched_ms = server_ts or int(time.time() * 1000)
+        fetched_ms = server_ts or None
         records = []
         for row in rows:
             rec = _map_snapshot_row(row, fetched_ms, volume_to_hand=False)

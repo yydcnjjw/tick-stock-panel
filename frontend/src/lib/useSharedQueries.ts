@@ -8,6 +8,22 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from './api'
 import { QK } from './queryKeys'
 
+/** 信号选项与 CZSC 可用性共用一次查询，不在信号卡片内请求。 */
+export function useCustomSignalOptions() {
+  const query = useQuery({ queryKey: QK.customSignalsOptions, queryFn: api.customSignalsOptions })
+  const czsc = query.data?.czsc
+  const czscUnavailableReason = query.isPending
+    ? '正在检查 CZSC 可用性'
+    : query.isError
+      ? 'CZSC 可用性查询失败，请重试'
+      : !czsc
+        ? '后端未提供 CZSC 可用性信息'
+        : !czsc.available
+          ? czsc.reason || 'CZSC 可选依赖不可用，请在后端安装并启用'
+          : null
+  return { ...query, czscUnavailableReason }
+}
+
 // ===== 全局共享 =====
 
 /** 能力检测 — Layout / Data / Keys 共用 */

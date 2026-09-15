@@ -612,10 +612,12 @@ INDICATOR_COLUMNS: frozenset[str] = frozenset(
 
 def get_signal_dependencies() -> dict[str, frozenset[str]]:
     """返回内置与 JSON 自定义信号的唯一依赖映射。"""
+    from app.indicators import czsc_signals
     from app.strategy import custom_signals
 
     return {
         **SIGNAL_DEPENDENCIES,
+        **{name: czsc_signals.INPUT_COLUMNS for name in czsc_signals.SIGNALS},
         **custom_signals.expression_dependencies(_get_custom_signal_exprs()),
     }
 
@@ -682,6 +684,12 @@ def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.Data
     exprs = _get_custom_signal_exprs()
     df = custom_signals.materialize_factor_columns(df, exprs, needed=needed)
     df = custom_signals.inject(df, exprs, needed=needed)
+
+    # 可选结构信号必须显式选择, 默认全量指标刷新不加载 CZSC。
+    if needed is not None:
+        from app.indicators import czsc_signals
+
+        df = czsc_signals.compute(df, needed)
 
     return df
 

@@ -488,6 +488,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
             onChange={onSignalPickerChange}
             kind="entry"
             options={{
+              context: 'monitor',
+              assetType,
               builtinSignals: pickerSignals,
               disabledSignals: intradayDisabledSignals,
               disabledSignalHint: intradayDisabledHint,
@@ -1283,6 +1285,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                 onChange={onSignalPickerChange}
                 kind="entry"
                 options={{
+                  context: 'monitor',
+                  assetType,
                   builtinSignals: pickerSignals,
                   disabledSignals: intradayDisabledSignals,
                   disabledSignalHint: intradayDisabledHint,

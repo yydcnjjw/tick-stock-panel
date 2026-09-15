@@ -297,7 +297,8 @@ class ScreenerService:
         )
 
         warmup = 60
-        start = target_date - timedelta(days=min((lookback_days + warmup) * 2, 180))
+        # 大结构信号声明的历史需求不能被原有 180 自然日上限截断。
+        start = target_date - timedelta(days=(lookback_days + warmup) * 2)
 
         enriched_dir = self.repo.store.data_dir / self._enriched_dirname
         # 同 _compute_enriched_full: turnover_rate 存储列随行透传 (#187)

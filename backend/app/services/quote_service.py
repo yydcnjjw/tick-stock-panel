@@ -50,6 +50,9 @@ SOURCE_LABELS = {
 # final 定版确认容差: 快照时间戳允许早于边界 5s 内 (供应商时间戳精度不一)
 _FINAL_CONFIRM_SLACK_MS = 5_000
 
+# 普通股票告警仅接受本轮、两分钟内的源快照; 抓取成功时间不能代替源时间。
+_MONITOR_MAX_SNAPSHOT_AGE_MS = 120_000
+
 # final 定版边界与重试窗口终点 (北京时间)。收盘窗口终点 15:30, 恰与盘后管道
 # 启动同时: 管道运行期间轮询本就被暂停, 此后未确认的定版不再写盘, 当日分区
 # 由管道按官方日线值级校正 —— 避免定版重试与权威重建互相覆盖。
@@ -1158,6 +1161,18 @@ class QuoteService:
                 return
             # 获取 enriched 数据 (刚算好的)
             enriched_today, enriched_date = self.get_enriched_today()
+            # 源时间缺失/过期/在未来时跳过。还需匹配本轮输入的 symbol + quote_ts,
+            # 防止只有指数刷新或 enriched 计算失败时重复评估上一轮股票缓存。
+            if {"symbol", "quote_ts"} <= set(daily_df.columns) and "quote_ts" in enriched_today.columns:
+                now_ms = int(cn_now().timestamp() * 1000)
+                current_quotes = daily_df.select(
+                    "symbol", pl.col("quote_ts").cast(pl.Int64, strict=False),
+                ).filter(pl.col("quote_ts").is_between(now_ms - _MONITOR_MAX_SNAPSHOT_AGE_MS, now_ms))
+                enriched_today = enriched_today.with_columns(
+                    pl.col("quote_ts").cast(pl.Int64, strict=False),
+                ).join(current_quotes, on=["symbol", "quote_ts"], how="semi")
+            else:
+                enriched_today = enriched_today.head(0)
             # 股票快照就绪 = 非空 + 日期为当日。未就绪时仅跳过股票轮,
             # ETF/指数轮有各自的空表+日期守卫, 不受影响 (纯指数行情/自选场景可独立评估)。
             stock_ready = (not enriched_today.is_empty()) and (enriched_date == cn_today())
@@ -1723,22 +1738,23 @@ class QuoteService:
                 and prev_date is not None
             )
 
+            # 增量和全量回退使用同一快照时点,午休与收盘由市场时间工具处理。
+            from app.market_time import trading_minutes_elapsed, trading_minutes_elapsed_from_ts
+            elapsed_minutes: float | None = None
+            if "quote_ts" in daily_df.columns and not daily_df.is_empty():
+                valid_ts = daily_df["quote_ts"].drop_nulls()
+                if not valid_ts.is_empty():
+                    elapsed_minutes = trading_minutes_elapsed_from_ts(valid_ts.median())
+            if elapsed_minutes is None:
+                elapsed_minutes = trading_minutes_elapsed()
+
             if use_incremental:
                 from app.indicators.pipeline import compute_enriched_today
-                from app.market_time import trading_minutes_elapsed_from_ts, trading_minutes_elapsed
                 instruments = self._repo.get_instruments()
                 # 将 API 直接提供的补充字段 JOIN 到 daily_df
                 today_ohlcv = daily_df
                 if quote_extra is not None and not quote_extra.is_empty():
                     today_ohlcv = daily_df.join(quote_extra, on="symbol", how="left")
-                # 量比时间折算: 优先用行情 quote_ts (真实成交时间), 缺失则兜底服务端时间
-                elapsed_minutes: float | None = None
-                if "quote_ts" in daily_df.columns and not daily_df.is_empty():
-                    valid_ts = daily_df["quote_ts"].drop_nulls()
-                    if not valid_ts.is_empty():
-                        elapsed_minutes = trading_minutes_elapsed_from_ts(valid_ts.median())
-                if elapsed_minutes is None:
-                    elapsed_minutes = trading_minutes_elapsed()
                 enriched_today = compute_enriched_today(
                     live_agg=live_agg,
                     prev_enriched=prev_enriched,
@@ -1753,7 +1769,7 @@ class QuoteService:
             # ---- 全量回退路径 ----
             if not use_incremental:
                 from datetime import timedelta
-                from app.indicators.pipeline import compute_enriched
+                from app.indicators.pipeline import compute_enriched, compute_signals
 
                 logger.info("enriched 全量计算 (live_agg=%s, 上次日期=%s)",
                             "ok" if not live_agg.is_empty() else "空", prev_date)
@@ -1797,6 +1813,16 @@ class QuoteService:
                         else None
                     ),
                 )
+                if elapsed_minutes and elapsed_minutes > 0:
+                    # compute_enriched 是盘后口径, 只折算当日部分成交量。
+                    # 在保留历史上下文的完整帧上重算信号, 使内置/自定义信号一致。
+                    enriched_full = enriched_full.with_columns(
+                        pl.when(pl.col("date") == today)
+                        .then(pl.col("vol_ratio_5d") * (240.0 / elapsed_minutes))
+                        .otherwise(pl.col("vol_ratio_5d"))
+                        .alias("vol_ratio_5d"),
+                    )
+                    enriched_full = compute_signals(enriched_full)
                 # momentum_3d 不在指标全集里, 但 deviate_3d 需要; 多日帧上 shift 补算
                 enriched_full = enriched_full.sort(["symbol", "date"]).with_columns(
                     (pl.col("close") / pl.col("close").shift(3).over("symbol") - 1).alias("momentum_3d")

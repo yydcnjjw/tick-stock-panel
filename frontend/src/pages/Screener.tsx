@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles, RefreshCw, Settings2, Store, RotateCcw, X } from 'lucide-react'
-import { api, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
+import { api, ApiError, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
+import { cnSignal, CZSC_COVERAGE_REASON_LABELS } from '@/lib/signals'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
@@ -645,7 +646,7 @@ export function Screener() {
         qc.invalidateQueries({ queryKey: QK.monitorRules }),
       )
     } else {
-      // 未监控 → 直接创建 type=strategy 规则
+      // 保存入口统一检查策略依赖，避免每张卡片请求。
       api.monitorRuleSave({
         id: genRuleId(),
         name: `策略监控 · ${strategyName}`,
@@ -663,6 +664,10 @@ export function Screener() {
         severity: 'info',
         message: '',
       }).then(() => qc.invalidateQueries({ queryKey: QK.monitorRules }))
+        .catch(error => {
+          // API 错误已提示；仍消费拒绝，并为网络异常补充提示。
+          if (!(error instanceof ApiError)) toast(String((error as Error).message || error), 'error')
+        })
     }
   }
 
@@ -869,6 +874,18 @@ export function Screener() {
           {run.isError && (
             <div className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-btn px-3 py-2">
               {String((run.error as any).message)}
+            </div>
+          )}
+
+          {!showAll && result?.czsc_coverage && (
+            <div className="mb-3 rounded-btn border border-border bg-surface px-3 py-2 text-[11px] leading-5 text-secondary">
+              <p>CZSC 可计算性 · {result.czsc_coverage.version} · 不可计算不等于未命中；首次可计算只建基线。</p>
+              {result.czsc_coverage.signals.map(signal => (
+                <p key={signal.signal_id}>
+                  {cnSignal(signal.signal_id)}：可计算 {signal.ready_rows} 行，不可计算 {signal.unavailable_rows} 行，涉及 {signal.unavailable_symbols} 只标的
+                  {Object.entries(signal.reasons).map(([reason, count]) => `；${CZSC_COVERAGE_REASON_LABELS[reason] ?? `其他原因（${reason}）`} ${count}`).join('')}
+                </p>
+              ))}
             </div>
           )}
 
@@ -1080,6 +1097,7 @@ export function Screener() {
 
       <StrategySettingsDialog
         strategyId={settingsStrategyId}
+        assetType={assetType}
         onClose={() => setSettingsStrategyId(null)}
         onSaved={(limit) => {
           if (settingsStrategyId) {

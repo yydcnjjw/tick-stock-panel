@@ -4,6 +4,7 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
+import { CZSC_MONITOR_UNSUPPORTED, isCzscSignal } from './signals'
 
 const BASE = ''
 
@@ -95,6 +96,39 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
     throw new ApiError(msg, res.status)
   }
   return res.json() as Promise<T>
+}
+
+export interface CzscChartLine {
+  start: string; end: string; start_price: number; end_price: number
+}
+export interface CzscChartResponse {
+  symbol: string
+  name: string
+  status: 'ready' | 'empty' | 'unavailable'
+  reason: string | null
+  version: string
+  timeframe: '1d'
+  source: string
+  price_basis: string
+  analysis_bars: number
+  min_bi_len: number
+  max_bi_num: number
+  input_start?: string
+  input_end?: string
+  input_count?: number
+  cutoff?: string | null
+  structure_start?: string | null
+  refreshed_at?: string
+  generation?: string
+  rows?: { date: string; open: number; high: number; low: number; close: number; volume: number;
+    amount: number; macd_dif: number; macd_dea: number; macd_hist: number }[]
+  strokes?: CzscChartLine[]
+  unfinished?: CzscChartLine[]
+  centers?: { start: string; end: string; low: number; high: number; bi_count: number }[]
+  fractals?: { date: string; price: number; kind: 'top' | 'bottom' }[]
+  signals?: { date: string; signal_id: string; price: number }[]
+  invalid_dates?: string[]
+  coverage?: CzscCoverage
 }
 
 // ===== Capabilities =====
@@ -404,6 +438,7 @@ export interface ScreenerResult {
   rows: any[]
   total: number
   elapsed_ms: number
+  czsc_coverage?: CzscCoverage
 }
 
 export interface ScreenerResultSummary {
@@ -790,6 +825,8 @@ export interface StrategyDetail {
   scoring_directions: Record<string, ScoringDirection>
   entry_signals: string[]
   exit_signals: string[]
+  /** 策略代码直接依赖的字段；旧服务可缺省。 */
+  required_features?: string[]
   minute_exit_trigger_supported_signals: string[]
   stop_loss: number | null
   take_profit: number | null
@@ -876,6 +913,8 @@ export interface CustomSignalOptions {
   stringFields?: string[]
   stringOperators?: string[]
   kinds: { key: string; label: string }[]
+  /** 可选依赖状态；旧后端缺少此字段时前端禁用 CZSC 新选择。 */
+  czsc?: { available: boolean; reason: string | null; version: string | null }
 }
 
 export interface CustomSignalAIGenerateResult {
@@ -1565,10 +1604,21 @@ export interface StrategyBacktestTrade {
   exit_signal_id?: string | null
 }
 
+export interface CzscCoverage {
+  version: string
+  signals: {
+    signal_id: string
+    ready_rows: number
+    unavailable_rows: number
+    unavailable_symbols: number
+    reasons: Record<string, number>
+  }[]
+}
+
 export interface StrategyBacktestResult {
   run_id: string
   config: Record<string, any>
-  stats: Record<string, any>
+  stats: Record<string, any> & { czsc_coverage?: CzscCoverage }
   equity_curve: { date: string; value: number; cash?: number; positions?: number; exposure?: number }[]
   drawdown_curve: { date: string; value: number }[]
   benchmark_curve?: { date: string; value: number; close?: number; name?: string; symbol?: string }[]
@@ -2389,6 +2439,9 @@ export const api = {
     request<KlineDailyLatestResponse>(
       `/api/kline/daily/latest?symbol=${encodeURIComponent(symbol)}`,
     ),
+  czscDaily: (symbol: string) => request<CzscChartResponse>(
+    `/api/kline/czsc-daily?symbol=${encodeURIComponent(symbol)}`, { quiet: true },
+  ),
   klineDailyBatch: (symbols: string[], days = 12) =>
     request<{ data: Record<string, KlineRow[]> }>('/api/kline/daily-batch', {
       method: 'POST',
@@ -3548,11 +3601,24 @@ export const api = {
   monitorRuleOptions: () =>
     request<MonitorRuleOptions>('/api/monitor-rules/options'),
 
-  monitorRuleSave: (rule: MonitorRule) =>
-    request<{ ok: boolean; rule: MonitorRule }>('/api/monitor-rules', {
+  monitorRuleSave: async (rule: MonitorRule) => {
+    // 新建和重新启用都经过此入口；关闭旧规则不受依赖限制。
+    if (rule.enabled) {
+      let hasCzsc = rule.conditions.some(condition => isCzscSignal(condition.field))
+      if (!hasCzsc && rule.type === 'strategy' && rule.strategy_id) {
+        const detail = await request<StrategyDetail>(`/api/strategies/${encodeURIComponent(rule.strategy_id)}`)
+        hasCzsc = [...detail.entry_signals, ...detail.exit_signals, ...(detail.required_features ?? [])].some(isCzscSignal)
+      }
+      if (hasCzsc) {
+        toast(CZSC_MONITOR_UNSUPPORTED, 'error')
+        throw new ApiError(CZSC_MONITOR_UNSUPPORTED, 400)
+      }
+    }
+    return request<{ ok: boolean; rule: MonitorRule }>('/api/monitor-rules', {
       method: 'POST',
       body: JSON.stringify(rule),
-    }),
+    })
+  },
 
   monitorRuleDelete: (id: string) =>
     request<{ ok: boolean }>(`/api/monitor-rules/${encodeURIComponent(id)}`, { method: 'DELETE' }),

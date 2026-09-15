@@ -1499,6 +1499,22 @@ class KlineRepository:
 
         return df
 
+    def get_daily_published(
+        self, symbol: str, end: date, limit: int, columns: list[str],
+    ) -> pl.DataFrame:
+        """读取已发布的股票 enriched 尾部, 不覆盖盘中缓存, 不过滤坏行。
+
+        行数以实际记录计; 调用方通过发布 generation 校验读取一致性。
+        读失败直接抛出, 避免把损坏数据伪装成无数据。
+        """
+        root = self.store.data_dir / "kline_daily_enriched"
+        if not any(root.glob("**/*.parquet")):
+            return pl.DataFrame()
+        lf = scan_enriched_parquet(
+            self._enriched_glob, cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+        ).filter((pl.col("symbol") == symbol) & (pl.col("date") <= end))
+        return guarded_collect(lf.select(columns).sort("date").tail(limit))
+
     def get_daily_batch(
         self,
         symbols: list[str],
@@ -1972,9 +1988,9 @@ class KlineRepository:
                 latest = value
         return latest
 
-    def get_matrix_data_generation(self, asset_type: str = "stock") -> str:
+    def get_matrix_data_generation(self, asset_type: str = "stock", *, readonly: bool = False) -> str:
         """Return the stable generation for managed enriched readers."""
-        return get_enriched_generation(self.store.data_dir, asset_type)
+        return get_enriched_generation(self.store.data_dir, asset_type, initialize=not readonly, recover=not readonly)
 
     def _bump_matrix_data_generation(self, asset_type: str) -> str:
         return bump_enriched_generation(self.store.data_dir, asset_type)

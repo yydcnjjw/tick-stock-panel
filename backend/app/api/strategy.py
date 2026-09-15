@@ -205,6 +205,7 @@ def _strategy_detail(
         },
         "entry_signals": overrides.get("entry_signals", s.entry_signals) if overrides else s.entry_signals,
         "exit_signals": overrides.get("exit_signals", s.exit_signals) if overrides else s.exit_signals,
+        "required_features": sorted(s.required_features),
         "minute_exit_trigger_supported_signals": sorted(MINUTE_EXIT_TRIGGER_SIGNALS),
         "stop_loss": overrides.get("stop_loss", s.stop_loss) if overrides else s.stop_loss,
         "take_profit": getattr(s, "take_profit", None),
@@ -454,22 +455,25 @@ def run_all(req: RunAllRequest, request: Request):
 @router.post("/config")
 def save_config(req: SaveConfigRequest, request: Request):
     engine = _get_engine(request)
-    _get_public_strategy(engine, req.strategy_id)
+    strategy = _get_public_strategy(engine, req.strategy_id)
+    before = strategy_config.load_override(_data_dir(request), req.strategy_id)
 
     _validate_scoring_config(req.overrides)
     # 剥离与策略默认值相同的字段，只保存用户真正修改过的值
     overrides = _strip_defaults(req.strategy_id, req.overrides, engine)
 
     strategy_config.save_override(_data_dir(request), req.strategy_id, overrides)
+    _invalidate_czsc_config(request, strategy, before, overrides)
     return {"ok": True}
 
 
 @router.patch("/config")
 def patch_config(req: SaveConfigRequest, request: Request):
     engine = _get_engine(request)
-    _get_public_strategy(engine, req.strategy_id)
+    strategy = _get_public_strategy(engine, req.strategy_id)
     data_dir = _data_dir(request)
     overrides = strategy_config.load_override(data_dir, req.strategy_id)
+    before = dict(overrides)
     overrides.update(req.overrides)
     _validate_scoring_config(overrides)
     strategy_config.save_override(
@@ -477,7 +481,24 @@ def patch_config(req: SaveConfigRequest, request: Request):
         req.strategy_id,
         _strip_defaults(req.strategy_id, overrides, engine),
     )
+    _invalidate_czsc_config(request, strategy, before, overrides)
     return {"ok": True}
+
+
+def _invalidate_czsc_config(request: Request, strategy: StrategyDef, before: dict, after: dict) -> None:
+    from app.services import strategy_cache
+
+    names = set(strategy.required_features)
+    for override in (before, after):
+        names.update(StrategyEngine._effective_signals(override, "entry_signals", strategy.entry_signals))
+        names.update(StrategyEngine._effective_signals(override, "exit_signals", strategy.exit_signals))
+    if before == after or not any(n.startswith(("signal_czsc_", "czsc_")) for n in names):
+        return
+    sid = strategy.meta["id"]
+    strategy_cache.invalidate_strategy(_data_dir(request), sid)
+    monitor_engine = getattr(request.app.state, "monitor_engine", None)
+    if monitor_engine is not None:
+        monitor_engine.invalidate_strategy_state(strategy_id=sid)
 
 
 def _validate_scoring_config(overrides: dict) -> None:
@@ -531,8 +552,10 @@ def _strip_defaults(strategy_id: str, overrides: dict, engine) -> dict:
 
 @router.delete("/config/{strategy_id}")
 def reset_config(strategy_id: str, request: Request):
-    _get_public_strategy(_get_engine(request), strategy_id)
+    strategy = _get_public_strategy(_get_engine(request), strategy_id)
+    before = strategy_config.load_override(_data_dir(request), strategy_id)
     strategy_config.delete_override(_data_dir(request), strategy_id)
+    _invalidate_czsc_config(request, strategy, before, {})
     return {"ok": True}
 
 

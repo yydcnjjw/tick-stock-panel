@@ -9,6 +9,7 @@ import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
+import { CZSC_MONITOR_UNSUPPORTED, czscStrategyUnsupportedReason, isCzscSignal } from '@/lib/signals'
 
 // 内置列名 → 中文标签
 const FIELD_LABEL: Record<string, string> = {}
@@ -28,6 +29,7 @@ Object.assign(FIELD_LABEL, {
 
 interface Props {
   strategyId: string | null
+  assetType?: 'stock' | 'etf'
   onClose: () => void
   onSaved?: (displayLimit: number | null) => void
   onAiModify?: () => void
@@ -175,7 +177,7 @@ function ParamField({ def, value, onChange }: {
   )
 }
 
-export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModify, onDeleted }: Props) {
+export function StrategySettingsDialog({ strategyId, assetType = 'stock', onClose, onSaved, onAiModify, onDeleted }: Props) {
   const [detail, setDetail] = useState<StrategyDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -399,6 +401,9 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
               <div className="flex items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
             ) : detail ? (
               <>
+                {czscStrategyUnsupportedReason(detail.execution_backend) && (
+                  <p className="text-[11px] text-warning">{czscStrategyUnsupportedReason(detail.execution_backend)}</p>
+                )}
                 {/* 名称 + 描述 + 显示上限 */}
                 <div className="flex items-end gap-4">
                   <div className="flex-1 space-y-2">
@@ -609,7 +614,7 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       defaultOpen={false}
                       extra={<SignalTriggerActions kind="entry" signals={entrySignals} onChange={setEntrySignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
                     >
-                      <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog' }} />
+                      <SignalPicker signals={entrySignals} onChange={setEntrySignals} kind="entry" options={{ variant: 'dialog', assetType, executionBackend: detail.execution_backend }} />
                       <div className="text-[10px] leading-4 text-muted/70">任一入场点满足即进入候选。</div>
                     </Section>
 
@@ -620,12 +625,15 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                       defaultOpen={false}
                       extra={<SignalTriggerActions kind="exit" signals={exitSignals} onChange={setExitSignals} buttonClassName="rounded-md border border-border bg-base p-1 text-muted transition-colors cursor-pointer" iconClassName="h-3 w-3" />}
                     >
-                      <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog' }} />
+                      <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog', assetType, executionBackend: detail.execution_backend }} />
                       <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
                     </Section>
 
                     <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3 py-2 text-[10px] leading-4 text-muted">
-                      出入场触发器保存后对<b className="text-secondary">回测和监控</b>生效;选股扫描仍按策略本身的筛选规则,不受此影响。
+                      出入场触发器保存后用于<b className="text-secondary">回测</b>；支持盘中计算的触发器也用于监控。选股扫描仍按策略本身的筛选规则。
+                      {[...entrySignals, ...exitSignals, ...(detail.required_features ?? [])].some(isCzscSignal) && (
+                        <p className="mt-1 text-warning">{CZSC_MONITOR_UNSUPPORTED}。回测中引用 CZSC 的一侧须使用次交易日开盘成交。</p>
+                      )}
                     </div>
 
                   </div>

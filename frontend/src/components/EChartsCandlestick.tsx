@@ -3,6 +3,7 @@ import { chartTheme, getTheme, useTheme } from '@/lib/theme'
 import { fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
+import { structureSeries, type ChartStructures } from './chartStructures'
 
 export interface OHLC {
   date: string
@@ -321,6 +322,7 @@ export const OVERLAY_INDICATORS: { key: string; label: string }[] = [
 
 interface Props {
   data: OHLC[]
+  structures?: ChartStructures
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]
@@ -474,6 +476,7 @@ function buildOption(
   infoIdx: number,
   linkedPrice: number | null | undefined,
   volumeCompare: VolumeCompareConfig,
+  structures?: ChartStructures,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
 
@@ -680,6 +683,8 @@ function buildOption(
     markLine: markLineData.length > 0 ? { silent: true, symbol: 'none', data: markLineData, animation: false } : undefined,
   })
 
+  series.push(...structureSeries(structures, dateIndexMap))
+
   if (hasMA) {
     const maLine = (key: keyof OHLC, color: string, name: string) => ({
       name, type: 'line',
@@ -787,6 +792,7 @@ function buildOption(
     dataZoom: [
       {
         type: 'inside',
+        ...(structures ? { filterMode: 'weakFilter' as const } : {}),
         xAxisIndex: xAxisIndices,
         start: 0,
         end: 100,
@@ -801,6 +807,7 @@ function buildOption(
 
 export function EChartsCandlestick({
   data,
+  structures,
   markers,
   ranges,
   priceLines,
@@ -1037,6 +1044,10 @@ export function EChartsCandlestick({
     })
 
     chart.on('click', (params: any) => {
+      if (params.seriesId === 'structure-points' && params.data?.date) {
+        onDateClickRef.current?.(params.data.date)
+        return
+      }
       if (params.componentType === 'markPoint' && params.name) {
         onDateClickRef.current?.(params.name)
         return
@@ -1178,6 +1189,7 @@ export function EChartsCandlestick({
       infoIdxRef.current,
       linkedPrice,
       volumeCompare,
+      structures,
     )
 
     chart.setOption(option, true)
@@ -1195,7 +1207,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, structures, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

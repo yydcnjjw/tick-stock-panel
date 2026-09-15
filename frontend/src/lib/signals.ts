@@ -15,6 +15,36 @@ export interface BuiltinSignalDefinition {
   description: string
 }
 
+export const CZSC_SIGNAL_EXPLANATION = 'CZSC 1.0.1 原生辅助判定，仅用于 A 股股票已收盘日线。各信号从不成立变为成立时触发一次，持续成立不重复触发；首次可计算时只建立基线。信号记录在识别日，不回填笔端点。辅助名称不代表严格缠论买卖点确认。'
+export const CZSC_MONITOR_UNSUPPORTED = 'CZSC 日线辅助信号暂不支持盘中监控'
+
+export const CZSC_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
+  { id: 'signal_czsc_first_buy', name: 'CZSC一买辅助', kind: 'entry', category: 'CZSC', description: 'V221126：CZSC 原生一买辅助判定，基于笔结构识别候选形态。' },
+  { id: 'signal_czsc_first_sell', name: 'CZSC一卖辅助', kind: 'exit', category: 'CZSC', description: 'V221126：CZSC 原生一卖辅助判定，基于笔结构识别候选形态。' },
+  { id: 'signal_czsc_second_buy', name: 'CZSC均线二买辅助', kind: 'entry', category: 'CZSC', description: 'V230320，固定 SMA21：结合笔结构与均线的原生二买辅助判定。' },
+  { id: 'signal_czsc_second_sell', name: 'CZSC均线二卖辅助', kind: 'exit', category: 'CZSC', description: 'V230320，固定 SMA21：结合笔结构与均线的原生二卖辅助判定。' },
+  { id: 'signal_czsc_third_buy', name: 'CZSC均线三买辅助', kind: 'entry', category: 'CZSC', description: 'V230318，固定 SMA34：结合笔结构与均线的原生三买辅助判定。' },
+  { id: 'signal_czsc_third_sell', name: 'CZSC均线三卖辅助', kind: 'exit', category: 'CZSC', description: 'V230318，固定 SMA34：结合笔结构与均线的原生三卖辅助判定。' },
+]
+
+export const normalizeCzscSignalId = (id: string) => id.startsWith('czsc_') ? `signal_${id}` : id
+export const isCzscSignal = (id: string) => normalizeCzscSignalId(id).startsWith('signal_czsc_')
+
+export function czscStrategyUnsupportedReason(executionBackend?: string): string | null {
+  if (!executionBackend || executionBackend === 'polars_expr') return null
+  const label: Record<string, string> = {
+    matrix_native: '矩阵策略', composite: '叠加策略', minute_filter: '分钟策略', python_history_legacy: '历史 Python 策略',
+  }
+  return `CZSC 首版仅支持普通日线策略，${label[executionBackend] ?? '当前策略类型'}不支持 CZSC 外部触发器`
+}
+
+export const CZSC_COVERAGE_REASON_LABELS: Record<string, string> = {
+  insufficient_structure: '笔结构不足',
+  missing_data: '数据缺失',
+  unclosed_bar: '日线尚未收盘',
+  baseline: '建立初始基线（不触发）',
+}
+
 /** 内置原子信号清单 (权威展示来源, 两页统一) */
 export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
   {
@@ -157,6 +187,7 @@ export const BUILTIN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
     category: '涨跌停',
     description: '盘中触及涨停但收盘未封住，用于强转弱或分歧监控。',
   },
+  ...CZSC_SIGNAL_DEFINITIONS,
 ]
 
 export const MONITOR_INTRADAY_SIGNAL_LABELS: Record<string, string> = {
@@ -203,5 +234,5 @@ const FIELD_LABELS: Record<string, string> = {
  */
 export function cnSignal(name: string, customNames?: Record<string, string>): string {
   if (customNames && name in customNames) return customNames[name]
-  return SIGNAL_LABELS[name] ?? FIELD_LABELS[name] ?? name
+  return SIGNAL_LABELS[normalizeCzscSignalId(name)] ?? FIELD_LABELS[name] ?? name
 }

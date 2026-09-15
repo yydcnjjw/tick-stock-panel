@@ -355,6 +355,25 @@ def _get_previous_closes(
     return result
 
 
+@router.get("/czsc-daily")
+def get_czsc_daily(
+    request: Request,
+    symbol: str = Query(..., pattern=r"^[0-9]{6}\.(SH|SZ|BJ)$"),
+):
+    from app.enriched_generation import EnrichedGenerationUnavailableError
+    from app.services.czsc_chart import get_chart
+
+    try:
+        return get_chart(request.app.state.repo, symbol)
+    except EnrichedGenerationUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="日线数据正在发布或版本不可用, 请稍后刷新") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("CZSC chart read failed for %s", symbol)
+        raise HTTPException(status_code=503, detail="CZSC 图表读取失败, 请稍后刷新") from exc
+
+
 @router.get("/daily")
 def get_daily(
     request: Request,
