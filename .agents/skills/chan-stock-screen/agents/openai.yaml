@@ -1,0 +1,3 @@
+interface:
+  display_name: "缠论三类买点选股"
+  short_description: "依据缠论原文复核三类买点并维护分组，另列中枢震荡观察"
