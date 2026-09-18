@@ -14,6 +14,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 import polars as pl
 
+from app.indicators.czsc_bars import FREQUENCIES, bar_close_time
 from app.market_time import CN_TZ, cn_now
 
 VERSION = "1.0.1"
@@ -122,13 +123,17 @@ def compute(df: pl.DataFrame, needed: set[str], *, now: datetime | None = None) 
 
 def _replay(
     df: pl.DataFrame, needed: set[str], *, now: datetime | None = None,
-    on_segment: Callable | None = None,
+    on_segment: Callable | None = None, timeframe: str = "1d",
 ) -> pl.DataFrame:
     """同一回放同时支持信号及可选结构快照; 普通计算不收集图表结构。"""
+    if timeframe not in FREQUENCIES:
+        raise ValueError("不支持的 CZSC 图表周期")
     wanted = selected(needed)
     if not wanted:
         return df
     native = _load_runtime()
+    freq = getattr(native.Freq, FREQUENCIES[timeframe])
+    minute = timeframe.endswith("m")
     missing = INPUT_COLUMNS - set(df.columns)
     if missing:
         raise ValueError(f"CZSC 日线输入缺少字段: {sorted(missing)}")
@@ -144,13 +149,18 @@ def _replay(
         for bar_id, row in enumerate(part.select("_czsc_row", *sorted(INPUT_COLUMNS)).iter_rows(named=True)):
             index = row["_czsc_row"]
             day = row["date"]
-            if not isinstance(day, date) or isinstance(day, datetime):
-                raise ValueError("CZSC 日线 date 必须为交易日期")
-            problem = None
-            if day > cutoff.date() or (day == cutoff.date() and cutoff.time() < time(15)):
-                problem = "unclosed_bar"
+            if timeframe == "1d":
+                if not isinstance(day, date) or isinstance(day, datetime):
+                    raise ValueError("CZSC 日线 date 必须为交易日期")
+                bar_dt = datetime.combine(day, time(15))
+                unclosed = day > cutoff.date() or (day == cutoff.date() and cutoff.time() < time(15))
+            else:
+                closed_at = bar_close_time(day, timeframe)
+                bar_dt = day if minute else datetime.combine(day, time(15))
+                unclosed = closed_at > cutoff.replace(tzinfo=None)
+            problem = "unclosed_bar" if unclosed else None
             numeric = [row[key] for key in ("open", "high", "low", "close", "volume", "amount")]
-            if not all(isinstance(x, (int, float)) and math.isfinite(x) and x > 0 for x in numeric) or not row["low"] <= min(row["open"], row["close"]) <= max(row["open"], row["close"]) <= row["high"]:
+            if not all(isinstance(x, (int, float)) and math.isfinite(x) and (x >= 0 if minute and i >= 4 else x > 0) for i, x in enumerate(numeric)) or not row["low"] <= min(row["open"], row["close"]) <= max(row["open"], row["close"]) <= row["high"]:
                 problem = "missing_data"
             if problem:
                 for name in wanted:
@@ -161,8 +171,8 @@ def _replay(
                 previous = dict.fromkeys(wanted)
                 continue
             bar = native.RawBar(
-                symbol=row["symbol"], id=bar_id, dt=datetime.combine(day, time(15)),
-                freq=native.Freq.D, open=row["open"], high=row["high"], low=row["low"],
+                symbol=row["symbol"], id=bar_id, dt=bar_dt,
+                freq=freq, open=row["open"], high=row["high"], low=row["low"],
                 close=row["close"], vol=row["volume"] * 100.0, amount=row["amount"],
             )
             if analysis is None:
