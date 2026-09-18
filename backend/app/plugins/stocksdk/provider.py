@@ -195,7 +195,7 @@ class StockSDKProvider:
                     result = bridge.run_job(job, timeout=180)
                 except bridge.StockSDKBridgeError as e:
                     logger.warning("stock-sdk minute 拉取失败(%d symbols): %s", len(chunk), e)
-                    result = {"rows": {}}
+                    raise
                 for sym, rows in (result.get("rows") or {}).items():
                     df = self._minute_df(rows, sym)
                     if not df.is_empty():

@@ -98,6 +98,8 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export type CzscTimeframe = '1m' | '5m' | '30m' | '1d' | '1w'
+
 export interface CzscChartLine {
   start: string; end: string; start_price: number; end_price: number
 }
@@ -107,7 +109,7 @@ export interface CzscChartResponse {
   status: 'ready' | 'empty' | 'unavailable'
   reason: string | null
   version: string
-  timeframe: '1d'
+  timeframe: CzscTimeframe
   source: string
   price_basis: string
   analysis_bars: number
@@ -115,6 +117,7 @@ export interface CzscChartResponse {
   max_bi_num: number
   input_start?: string
   input_end?: string
+  source_count?: number
   input_count?: number
   cutoff?: string | null
   structure_start?: string | null
@@ -2439,6 +2442,9 @@ export const api = {
     request<KlineDailyLatestResponse>(
       `/api/kline/daily/latest?symbol=${encodeURIComponent(symbol)}`,
     ),
+  czscChart: (symbol: string, timeframe: CzscTimeframe) => request<CzscChartResponse>(
+    `/api/kline/czsc?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`, { quiet: true },
+  ),
   czscDaily: (symbol: string) => request<CzscChartResponse>(
     `/api/kline/czsc-daily?symbol=${encodeURIComponent(symbol)}`, { quiet: true },
   ),

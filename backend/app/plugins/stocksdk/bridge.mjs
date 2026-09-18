@@ -185,7 +185,7 @@ async function opAdj(sdk, job) {
 async function opMinute(sdk, job) {
   const { symbols = [], period = 5, start, end, concurrency = 6 } = job
   const out = {}
-  await mapPool(symbols, concurrency, async (sym) => {
+  const results = await mapPool(symbols, concurrency, async (sym) => {
     const opts = { period: String(period) }
     if (start) opts.startDate = start
     if (end) opts.endDate = end
@@ -193,6 +193,9 @@ async function opMinute(sdk, job) {
     out[sym] = Array.isArray(bars) ? bars : []
     return out[sym]
   })
+  // mapPool 会收集异常；必须显式上报，不能把失败标的静默变成空数据。
+  const failed = results.findIndex((result) => result && result.__error)
+  if (failed >= 0) throw new Error(`${symbols[failed]}: ${results[failed].__error}`)
   return out
 }
 

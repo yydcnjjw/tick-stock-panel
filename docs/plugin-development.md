@@ -9,6 +9,21 @@
 > 无代码接入(纯 HTTP YAML 配置)请看 [custom-data-source.md](./custom-data-source.md),
 > 两种方式遵循同一套内部数据契约。
 
+## 内置交易所分钟源
+
+`exchange_minute`（设置页「交易所分钟行情」）仅声明 `minute`，通过上交所公开行情服务
+`/v1/{sh1|sz1}/mink/{code}?period=1` 读取沪深股票/ETF 的分钟原始价。不覆盖北交所、
+指数或全市场增量推送，不会自动成为其他数据集的来源。
+
+上游行格式为 `[YYYYMMDDHHMMSS, open, high, low, close, volume, amount]`；时间转换为
+北京墙钟，成交量由股除以 100 转为手，成交额保持元，09:30 竞价行保留给统一聚合层。
+按请求起点估计读取上界，单股最多 70000 行并在本地裁剪日期；不承诺任意历史日期可得。
+同一插件实例请求串行、最多每秒 4 次。异常响应、错误代码、重复时间和非法价格均拒收。
+连接失败向同步调用方报告，真实空记录与失败分别处理，不改用另一来源冒充成功。
+
+2026-09-18 实测恒瑞医药 251 个完整交易日的分钟聚合 OHLC 与同源日线一致，
+另核对沪深股票和 ETF 的字段形状。该验证是样本证据，不保证所有标的或未来请求完整。
+
 ## 快速上手
 
 一个插件 = 一个目录 + 一个 `plugin.yaml` 清单:
@@ -246,7 +261,7 @@ provider 不应自行切换或回退到其他数据源。
 | `get_realtime` | **软失败**: 返回 `[]` + warning 日志, 保证轮询线程不中断 |
 | `get_realtime_indices` | **软失败**: 返回 `None` + warning 日志, 保留上轮有效缓存; 成功无数据返回 `[]` |
 | `get_depth_batch` | 单批异常由服务隔离并保留其他批次; 不跨数据源回退 |
-| `get_minute` | 抛异常时调用方自动回退 TickFlow 重试 |
+| `get_minute` | 实时补拉保留既有 TickFlow 回退；落盘同步显式上报配置源失败，不伪装为空结果 |
 | `get_daily` / `get_adj_factors` / `get_financials` | 异常由上层同步流程捕获记录; 无数据返回空 DataFrame |
 | `iter_daily` | 可选; 每批必须符合 `get_daily` 契约。流正常结束后才提交 staging; 未捕获异常会丢弃 staging。provider 内已定义的单标的软失败语义保持不变 |
 

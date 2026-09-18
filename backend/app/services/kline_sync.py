@@ -29,6 +29,10 @@ from app.tickflow.repository import KlineRepository, replace_with_retry
 logger = logging.getLogger(__name__)
 
 
+class MinuteSyncError(RuntimeError):
+    """分钟落盘同步失败, 使用可下发给页面的错误说明。"""
+
+
 def _atomic_write_parquet(df: pl.DataFrame, out) -> None:
     """先写临时文件再原子替换, 避免进程中断留下损坏的 parquet。
 
@@ -872,6 +876,7 @@ def _try_custom_minute(
     asset_type: AssetType,
     freq: str = "1m",
     on_chunk_done: Callable[[int, int, str], None] | None = None,
+    raise_on_error: bool = False,
 ) -> tuple[pl.DataFrame | None, bool]:
     """尝试从自定义分钟源拉取。返回 (df, should_fallback_to_tickflow)。
 
@@ -881,6 +886,7 @@ def _try_custom_minute(
 
     自定义源异常时返回 fallback=True。单股拉取调用方另行检查 TickFlow 原生
     能力, 避免自定义源增广能力误放行无权限请求。
+    落盘同步传 raise_on_error=True: 配置源请求失败必须上报, 不退化为同步成功。
 
     resolver 异常边界由 _resolve_minute_provider 统一兜底; 业务调用
     (provider.get_minute) 仍在本函数 try 块内, 与 resolver 异常分离
@@ -894,6 +900,8 @@ def _try_custom_minute(
     provider, fallback, err = _resolve_minute_provider(provider_name)
     if fallback:
         if err is not None:
+            if raise_on_error:
+                raise MinuteSyncError(f"分钟数据源 {provider_name} 不可用,请检查数据源配置")
             logger.warning("custom minute provider %s resolution failed, falling back to TickFlow: %s",
                            provider_name, err)
         return (None, True)
@@ -911,6 +919,10 @@ def _try_custom_minute(
             asset_type=asset_type, freq=freq, on_chunk_done=wrapped_cb,
         )
     except Exception as e:
+        if raise_on_error:
+            raise MinuteSyncError(
+                f"分钟数据源 {provider_name} 请求失败,请检查数据源或网络连接后重试"
+            ) from e
         logger.warning("custom minute provider %s call failed, falling back to TickFlow: %s",
                        provider_name, e)
         return (None, True)
@@ -918,6 +930,8 @@ def _try_custom_minute(
         # 时区契约守卫: 插件/自定义源帧同样收口为北京墙钟 (CONTRIBUTING §3.3)
         df = _enforce_minute_beijing_wallclock(df, source=provider_name)
     except Exception as e:
+        if raise_on_error:
+            raise MinuteSyncError(f"分钟数据源 {provider_name} 时间格式不符合要求") from e
         logger.warning("custom minute provider %s datetime 契约校验失败, falling back to TickFlow: %s",
                        provider_name, e)
         return (None, True)
@@ -955,6 +969,7 @@ def sync_minute_batch(
     df, fallback = _try_custom_minute(
         symbols, start_time=start_time, end_time=end_time,
         asset_type=asset_type, freq="1m", on_chunk_done=on_chunk_done,
+        raise_on_error=on_segment is not None,
     )
     if not fallback:
         # 自定义源成功: 遵守与 TickFlow 路径一致的 on_segment 契约。

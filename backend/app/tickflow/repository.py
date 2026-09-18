@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
@@ -19,7 +20,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import duckdb
@@ -1514,6 +1515,22 @@ class KlineRepository:
             self._enriched_glob, cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
         ).filter((pl.col("symbol") == symbol) & (pl.col("date") <= end))
         return guarded_collect(lf.select(columns).sort("date").tail(limit))
+
+    def get_minute_chart_generation(self) -> str:
+        """分钟图表只读版本: 复用分区修改指纹, 不初始化或写入版本文件。"""
+        root = self.store.data_dir / "kline_minute"
+        parts = [(str(path.relative_to(root)), self._partition_fingerprint(path))
+                 for path in sorted(root.glob("**/*.parquet"))]
+        return hashlib.sha256(repr(parts).encode()).hexdigest()
+
+    def get_minute_published(self, symbol: str, end: datetime, limit: int) -> pl.DataFrame:
+        """股票图表的有界分钟快照; 保留坏行且让读取错误上抛, 不混入实时内存。"""
+        if not any((self.store.data_dir / "kline_minute").glob("**/*.parquet")):
+            return pl.DataFrame()
+        lf = pl.scan_parquet(self._minute_glob).select(
+            "symbol", "datetime", "open", "high", "low", "close", "volume", "amount",
+        ).filter((pl.col("symbol") == symbol) & (pl.col("datetime") <= end))
+        return guarded_collect(lf.sort("datetime").tail(limit), engine="streaming")
 
     def get_daily_batch(
         self,

@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from functools import lru_cache
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -355,23 +355,32 @@ def _get_previous_closes(
     return result
 
 
-@router.get("/czsc-daily")
-def get_czsc_daily(
+@router.get("/czsc")
+def get_czsc_chart(
     request: Request,
     symbol: str = Query(..., pattern=r"^[0-9]{6}\.(SH|SZ|BJ)$"),
+    timeframe: Literal["1m", "5m", "30m", "1d", "1w"] = "1d",
 ):
     from app.enriched_generation import EnrichedGenerationUnavailableError
     from app.services.czsc_chart import get_chart
 
     try:
-        return get_chart(request.app.state.repo, symbol)
+        return get_chart(request.app.state.repo, symbol, timeframe=timeframe)
     except EnrichedGenerationUnavailableError as exc:
-        raise HTTPException(status_code=503, detail="日线数据正在发布或版本不可用, 请稍后刷新") from exc
+        raise HTTPException(status_code=503, detail="行情数据正在更新或版本不可用, 请稍后刷新") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("CZSC chart read failed for %s", symbol)
         raise HTTPException(status_code=503, detail="CZSC 图表读取失败, 请稍后刷新") from exc
+
+
+@router.get("/czsc-daily")
+def get_czsc_daily(
+    request: Request,
+    symbol: str = Query(..., pattern=r"^[0-9]{6}\.(SH|SZ|BJ)$"),
+):
+    return get_czsc_chart(request, symbol, timeframe="1d")
 
 
 @router.get("/daily")
@@ -1300,7 +1309,15 @@ async def sync_minute_single(request: Request, body: dict):
     def _run():
         return kline_sync.sync_and_persist_minute([symbol], repo, capset, days=days, force_full_days=True)
 
-    written = await loop.run_in_executor(_long_task_executor, _run)
+    try:
+        written = await loop.run_in_executor(_long_task_executor, _run)
+    except kline_sync.MinuteSyncError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if written == 0:
+        raise HTTPException(
+            status_code=422,
+            detail="分钟数据源未返回可写入数据,请检查标的、日期范围和数据源覆盖后重试",
+        )
 
     # 刷新视图
     from app.jobs.daily_pipeline import _refresh_single_view

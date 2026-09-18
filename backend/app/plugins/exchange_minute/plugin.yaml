@@ -1,0 +1,7 @@
+name: exchange_minute
+display_name: "交易所分钟行情"
+runtime: none
+entry: app.plugins.exchange_minute.provider:ExchangeMinuteProvider
+datasets: [minute]
+description: "上交所公开行情接口的沪深股票/ETF 1分钟K，不复权，成交量转为手；不覆盖北交所和指数。历史以实际返回为准，单股最多读取70000条。"
+homepage: "https://www.sse.com.cn/market/price/trends/"

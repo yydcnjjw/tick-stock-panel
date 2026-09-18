@@ -8,7 +8,7 @@ function StockEntry(context: FrontendSlotContextMap[keyof FrontendSlotContextMap
   if (!('symbol' in context)) return null
   const { symbol } = context
   return <div className="border-t border-border px-4 py-2">
-    <Link to={`/czsc?symbol=${encodeURIComponent(symbol)}`} className="text-xs text-accent hover:underline">查看 CZSC 日线结构图 →</Link>
+    <Link to={`/czsc?symbol=${encodeURIComponent(symbol)}`} className="text-xs text-accent hover:underline">查看 CZSC 多周期结构图 →</Link>
   </div>
 }
 

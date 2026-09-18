@@ -77,6 +77,40 @@ def test_center_needs_three_bis_even_when_native_validates():
     assert structure_snapshot(analysis)["centers"] == []
 
 
+@pytest.mark.parametrize("timeframe", ["1m", "5m", "30m", "1w"])
+def test_period_chart_matches_native_strokes_and_keeps_signal_prefix(history, timeframe):
+    from app.indicators.czsc_bars import FREQUENCIES
+    from app.indicators.czsc_chart import build_chart, structure_snapshot
+
+    native = cs._load_runtime()
+    minute = timeframe.endswith("m")
+    if minute:
+        step = int(timeframe[:-1])
+        per_session = 120 // step
+        dates = [datetime(2018, 1, 2) + timedelta(days=i // (per_session * 2),
+                 minutes=(570 if i // per_session % 2 == 0 else 780) + (i % per_session + 1) * step)
+                 for i in range(len(history))]
+    else:
+        dates = [date(2000, 1, 7) + timedelta(weeks=i) for i in range(len(history))]
+    frame = history.with_columns(pl.Series("date", dates))
+    if minute:
+        frame = frame.with_columns(pl.lit(0.0).alias("volume"), pl.lit(0.0).alias("amount"))
+    chart = build_chart(frame, timeframe=timeframe)
+    analysis = native.CZSC([
+        native.RawBar(symbol=r["symbol"], id=i,
+                      dt=r["date"] if minute else datetime.combine(r["date"], datetime.min.time().replace(hour=15)),
+                      freq=getattr(native.Freq, FREQUENCIES[timeframe]),
+                      open=r["open"], high=r["high"], low=r["low"], close=r["close"],
+                      vol=r["volume"] * 100, amount=r["amount"])
+        for i, r in enumerate(frame.iter_rows(named=True))
+    ], max_bi_num=50, min_bi_len=6)
+    assert chart["strokes"] == structure_snapshot(analysis, timeframe)["strokes"]
+    assert chart["strokes"] and not chart["invalid_dates"]
+    assert ("T" in chart["rows"][0]["date"]) == minute
+    prefix = build_chart(frame.head(800), timeframe=timeframe)
+    assert prefix["signals"] == [s for s in chart["signals"] if s["date"] <= prefix["rows"][-1]["date"]]
+
+
 class Repo:
     def __init__(self, frame):
         self.frame = frame
@@ -99,6 +133,15 @@ class Repo:
         if self.change_during_read:
             self.generation += "x"
         return self.frame.filter(pl.col("date") <= end).tail(limit)
+
+    def get_minute_chart_generation(self):
+        return self.generation
+
+    def get_minute_published(self, symbol, end, limit):
+        self.reads += 1
+        if self.change_during_read:
+            self.generation += "x"
+        return self.frame.filter(pl.col("datetime") <= end).tail(limit)
 
 
 def test_cache_revision_cutoff_and_failed_publication(history):
@@ -133,6 +176,64 @@ def test_api_errors_empty_and_optional_dependency(history, monkeypatch):
     assert client.get(url, params={"symbol": "600000.SH"}).json()["status"] == "empty"
     monkeypatch.setattr(cs, "availability", lambda: {"available": False, "reason": "未安装", "version": None})
     assert client.get(url, params={"symbol": "600000.SH"}).json()["status"] == "unavailable"
+
+
+def test_multi_period_api_cache_revision_and_minute_close_boundary():
+    from app.services.czsc_chart import get_chart
+
+    times = [datetime(2024, 1, 2, 9, 30) + timedelta(minutes=i) for i in range(1, 241)
+             if i <= 120]  # Morning session, no synthetic lunch bars.
+    frame = pl.DataFrame({"symbol": ["600000.SH"] * len(times), "datetime": times,
+                          "open": 10.0, "high": 12.0, "low": 9.0, "close": 11.0,
+                          "volume": 10.0, "amount": 11000.0})
+    repo = Repo(frame)
+    now = datetime(2024, 1, 2, 10, 17, tzinfo=CN_TZ)
+    first = get_chart(repo, "600000.SH", timeframe="30m", now=now)
+    assert first["cutoff"] == "2024-01-02T10:00"
+    assert get_chart(repo, "600000.SH", timeframe="30m", now=now) == first
+    assert repo.reads == 1
+    five = get_chart(repo, "600000.SH", timeframe="5m", now=now)
+    assert five["cutoff"] == "2024-01-02T10:15" and repo.reads == 2
+    repo.frame = frame.with_columns(pl.lit(10.5).alias("close"))
+    repo.generation = "b"
+    assert get_chart(repo, "600000.SH", timeframe="5m", now=now)["rows"][-1]["close"] == 10.5
+    repo.change_during_read = True
+    repo.generation = "c"
+    with pytest.raises(EnrichedGenerationUnavailableError):
+        get_chart(repo, "600000.SH", timeframe="5m", now=now)
+    repo.change_during_read = False
+    app = FastAPI()
+    app.include_router(router)
+    app.state.repo = repo
+    client = TestClient(app)
+    assert client.get("/api/kline/czsc", params={"symbol": "600000.SH", "timeframe": "30m"}).json()["timeframe"] == "30m"
+    assert client.get("/api/kline/czsc", params={"symbol": "600000.SH", "timeframe": "3m"}).status_code == 422
+    assert client.get("/api/kline/czsc", params={"symbol": "510300.SH", "timeframe": "1m"}).status_code == 400
+    app.state.repo = Repo(frame.clear())
+    assert client.get("/api/kline/czsc", params={"symbol": "600000.SH", "timeframe": "1m"}).json()["status"] == "empty"
+
+
+def test_minute_repository_read_is_bounded_revision_sensitive_and_never_swallows_corruption(tmp_path):
+    from app.tickflow.repository import KlineRepository
+
+    root = tmp_path / "kline_minute" / "date=2024-01-02"
+    root.mkdir(parents=True)
+    path = root / "part.parquet"
+    repo = object.__new__(KlineRepository)
+    repo.store = SimpleNamespace(data_dir=tmp_path)
+    repo._minute_glob = str(tmp_path / "kline_minute" / "**" / "*.parquet")
+    before = repo.get_minute_chart_generation()
+    frame = pl.DataFrame({"symbol": ["600000.SH"] * 3,
+                          "datetime": [datetime(2024, 1, 2, 9, m) for m in [31, 32, 33]],
+                          "open": 10.0, "high": 12.0, "low": 9.0, "close": 11.0,
+                          "volume": 0.0, "amount": 0.0})
+    frame.write_parquet(path)
+    assert repo.get_minute_chart_generation() != before
+    result = repo.get_minute_published("600000.SH", datetime(2024, 1, 2, 9, 32), 1)
+    assert result["datetime"].to_list() == [datetime(2024, 1, 2, 9, 32)]
+    path.write_bytes(b"corrupt parquet")
+    with pytest.raises(pl.exceptions.ComputeError):
+        repo.get_minute_published("600000.SH", datetime(2024, 1, 2, 10), 10)
 
 
 def test_published_read_ignores_live_cache_and_counts_rows(history, tmp_path):
