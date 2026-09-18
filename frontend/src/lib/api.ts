@@ -1618,6 +1618,19 @@ export interface CzscCoverage {
   }[]
 }
 
+export type BacktestProgress = {
+  phase: 'czsc_signals'
+  completed: number
+  total: number
+} | {
+  /** Older simulation events omit phase. */
+  phase?: 'simulation'
+  day: number
+  total: number
+  date: string
+  equity: number
+}
+
 export interface StrategyBacktestResult {
   run_id: string
   config: Record<string, any>

@@ -621,7 +621,10 @@ def get_signal_dependencies() -> dict[str, frozenset[str]]:
         **custom_signals.expression_dependencies(_get_custom_signal_exprs()),
     }
 
-def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.DataFrame:
+def compute_signals(
+    df: pl.DataFrame, needed: set[str] | None = None, *,
+    progress_cb: Callable[[dict], None] | None = None, cancel_event=None, czsc_max_workers: int = 1,
+) -> pl.DataFrame:
     """从已有指标列计算原子信号布尔列。
 
     输入必须包含 compute_indicators() 产出的指标列。
@@ -689,7 +692,10 @@ def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.Data
     if needed is not None:
         from app.indicators import czsc_signals
 
-        df = czsc_signals.compute(df, needed)
+        df = czsc_signals.compute(
+            df, needed, progress_cb=progress_cb,
+            cancel_event=cancel_event, max_workers=czsc_max_workers,
+        )
 
     return df
 

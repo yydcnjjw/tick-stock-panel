@@ -1,22 +1,34 @@
 import { useSyncExternalStore } from 'react'
-import type { StrategyBacktestResult } from './api'
+import type { BacktestProgress, StrategyBacktestResult } from './api'
+
+export type { BacktestProgress } from './api'
 
 /**
  * 全局回测任务管理 (SSE 模式 + 任务缓存 + 重连支持)。
  *
  * 特性:
- * - 实时进度: EventSource 监听后端 SSE, 推送 day/total/equity
+ * - 实时进度: EventSource 监听后端 SSE, 区分信号准备与成交模拟阶段
  * - 可取消: POST /strategy/cancel/{job_key}, 后端 cancel_event
  * - 切页/刷新保持: 后端按参数 hash 缓存任务, 重连不重启
  *   - 切页: 模块级 store 保持, EventSource 随组件卸载断开, 回来后重连
  *   - 刷新: localStorage 存 job 参数, 刷新后重新连接到同一任务
  */
 
-export interface BacktestProgress {
-  day: number
-  total: number
-  date: string
-  equity: number
+export function describeBacktestProgress(progress: BacktestProgress | null | undefined): {
+  label: string
+  percent: number
+} | null {
+  if (!progress || !Number.isFinite(progress.total) || progress.total <= 0) return null
+  const preparing = progress.phase === 'czsc_signals'
+  if (!preparing && progress.phase != null && progress.phase !== 'simulation') return null
+  const completed = preparing ? progress.completed : progress.day
+  if (!Number.isFinite(completed) || completed < 0) return null
+  return {
+    label: preparing
+      ? `准备 CZSC 信号 · ${completed}/${progress.total} 只股票`
+      : `回测中 · 第 ${completed}/${progress.total} 天 (${progress.date})`,
+    percent: Math.min(100, (completed * 100) / progress.total),
+  }
 }
 
 export interface BacktestTask {

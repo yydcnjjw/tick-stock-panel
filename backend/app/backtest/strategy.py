@@ -1310,7 +1310,12 @@ class StrategyBacktestService:
                     load_end,
                     feature_plan,
                     asset_type=config.asset_type,
+                    progress_cb=progress_cb,
+                    cancel_event=cancel_event,
+                    czsc_max_workers=4,
                 )
+            except czsc_signals.CzscReplayCancelledError:
+                return _err("cancelled")
             except (ValueError, pl.exceptions.PolarsError) as e:
                 return _err(f"回测特征准备失败: {e}")
             timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)

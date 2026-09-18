@@ -22,7 +22,7 @@ import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { cnSignal, czscStrategyUnsupportedReason, isCzscSignal } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { SignalPicker } from '@/components/screener/SignalPicker'
-import { startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
+import { describeBacktestProgress, startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
 import { useDataStatus, useCapabilities, useCustomSignalOptions } from '@/lib/useSharedQueries'
 import { EmptyState } from '@/components/EmptyState'
 import { WarmupBadge } from '@/components/WarmupBadge'
@@ -1078,6 +1078,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   })
 
   const backtestTask = useBacktestTask()
+  const backtestProgress = describeBacktestProgress(backtestTask?.progress)
   const isPending = backtestTask?.isPending ?? false
   const saveCandidate = useMutation({
     mutationFn: () => {
@@ -2150,19 +2151,22 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 <div className={backtestTask?.reconnecting ? 'text-xs font-medium text-warning' : 'text-xs font-medium text-accent'}>
                   {backtestTask?.reconnecting
                     ? '连接中断，重试中…'
-                    : backtestTask?.progress
-                      ? `回测中 · 第 ${backtestTask.progress.day}/${backtestTask.progress.total} 天 (${backtestTask.progress.date})`
+                    : backtestProgress
+                      ? backtestProgress.label
                       : '正在重新计算回测…'}
                 </div>
                 <div className="mt-0.5 text-[11px] text-secondary">
                   {backtestTask?.reconnecting
                     ? '正在尝试恢复连接，若持续失败可停止后重试'
-                    : result ? '当前展示上次结果，完成后自动替换' : '正在加载回测数据…'}
+                    : result ? '当前展示上次结果，完成后自动替换'
+                      : backtestTask?.progress?.phase === 'czsc_signals'
+                        ? '正在按历史日线计算信号，完成后开始成交模拟'
+                        : backtestProgress ? '正在模拟成交与资金变化' : '正在加载回测数据…'}
                 </div>
               </div>
-              {backtestTask?.progress && (
+              {backtestProgress && (
                 <span className="ml-auto shrink-0 font-mono text-sm font-semibold text-accent">
-                  {((backtestTask.progress.day / backtestTask.progress.total) * 100).toFixed(0)}%
+                  {backtestProgress.percent.toFixed(0)}%
                 </span>
               )}
               <button
@@ -2174,11 +2178,11 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                 停止
               </button>
             </div>
-            {backtestTask?.progress && (
+            {backtestProgress && (
               <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-base/60">
                 <div
                   className="h-full rounded-full bg-accent transition-all duration-300 ease-out"
-                  style={{ width: `${(backtestTask.progress.day / backtestTask.progress.total) * 100}%` }}
+                  style={{ width: `${backtestProgress.percent}%` }}
                 />
               </div>
             )}

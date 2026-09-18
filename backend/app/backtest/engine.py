@@ -402,14 +402,21 @@ class BacktestEngine:
         end: date,
         feature_plan,
         asset_type: str = "stock",
+        *,
+        progress_cb: Callable[[dict], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        czsc_max_workers: int = 1,
     ) -> pl.DataFrame:
         """按解析后的依赖加载窄基础列并计算回测所需特征。"""
+        from app.indicators.czsc_signals import CzscReplayCancelledError
         from app.indicators.pipeline import (
             compute_indicators,
             compute_limit_signals,
             compute_signals,
         )
 
+        if cancel_event is not None and cancel_event.is_set():
+            raise CzscReplayCancelledError("回测已取消")
         df = self.load_panel(
             symbols,
             start,
@@ -417,6 +424,8 @@ class BacktestEngine:
             columns=sorted(feature_plan.base_columns),
             asset_type=asset_type,
         )
+        if cancel_event is not None and cancel_event.is_set():
+            raise CzscReplayCancelledError("回测已取消")
         if df.is_empty():
             return df
 
@@ -447,7 +456,11 @@ class BacktestEngine:
         matrix_native = feature_plan.execution_backend == "matrix_native"
         if not matrix_native:
             df = compute_indicators(df, needed=set(feature_plan.indicator_columns))
-            df = compute_signals(df, needed=set(feature_plan.signal_columns))
+            df = compute_signals(
+                df, needed=set(feature_plan.signal_columns),
+                progress_cb=progress_cb, cancel_event=cancel_event,
+                czsc_max_workers=czsc_max_workers,
+            )
         if not instruments.is_empty():
             df = compute_limit_signals(
                 df,
