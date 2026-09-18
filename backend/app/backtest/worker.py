@@ -82,6 +82,25 @@ def _rss_bytes() -> int:
     return int(psutil.Process(os.getpid()).memory_info().rss)
 
 
+def _terminate_worker_tree(process) -> None:
+    """强制停止时一并回收 CZSC 回放子进程, 防止父 worker 退出后继续占用 CPU。"""
+    descendants = []
+    if getattr(process, "pid", None) is not None:
+        with suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            descendants = psutil.Process(process.pid).children(recursive=True)
+    for child in reversed(descendants):
+        with suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            child.terminate()
+    process.terminate()
+    process.join(timeout=5.0)
+    _, alive = psutil.wait_procs(descendants, timeout=1.0)
+    for child in alive:
+        with suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+            child.kill()
+    if alive:
+        psutil.wait_procs(alive, timeout=1.0)
+
+
 def _strategy_dirs(data_dir: Path) -> list[Path]:
     app_dir = Path(__file__).resolve().parents[1]
     return [
@@ -315,8 +334,7 @@ def run_worker_task(
                 if cancel_started is None:
                     cancel_started = time.monotonic()
                 elif time.monotonic() - cancel_started >= _CANCEL_GRACE_SECONDS:
-                    process.terminate()
-                    process.join(timeout=5.0)
+                    _terminate_worker_tree(process)
                     raise BacktestWorkerError(
                         "backtest worker did not stop within 5 seconds after cancellation"
                     )
@@ -356,8 +374,7 @@ def run_worker_task(
         if process.is_alive():
             # 终态消息 (result/error) 已完整送达, 子进程只是退出收尾慢:
             # 强制结束并继续走结果/错误处理, 不把已送达的成功结果当失败丢弃。
-            process.terminate()
-            process.join(timeout=5.0)
+            _terminate_worker_tree(process)
             worker_exit_forcibly = True
             logger.warning(
                 "%s worker delivered its terminal message but did not exit within "
@@ -389,7 +406,6 @@ def run_worker_task(
         return result
     finally:
         if process.is_alive():
-            process.terminate()
-            process.join(timeout=5.0)
+            _terminate_worker_tree(process)
         events.close()
         events.join_thread()

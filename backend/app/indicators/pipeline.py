@@ -657,7 +657,10 @@ def _needed_references_limit_prices(needed: set[str]) -> bool:
             return True
     return False
 
-def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.DataFrame:
+def compute_signals(
+    df: pl.DataFrame, needed: set[str] | None = None, *,
+    progress_cb: Callable[[dict], None] | None = None, cancel_event=None, czsc_max_workers: int = 1,
+) -> pl.DataFrame:
     """注入自定义信号布尔列 (含迁移自内置的 signal_* 定义)。
 
     输入必须包含 compute_indicators() 产出的指标列。
@@ -684,7 +687,10 @@ def compute_signals(df: pl.DataFrame, needed: set[str] | None = None) -> pl.Data
     if needed is not None:
         from app.indicators import czsc_signals
 
-        df = czsc_signals.compute(df, needed)
+        df = czsc_signals.compute(
+            df, needed, progress_cb=progress_cb,
+            cancel_event=cancel_event, max_workers=czsc_max_workers,
+        )
 
     return df
 
