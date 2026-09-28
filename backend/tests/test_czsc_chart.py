@@ -9,13 +9,12 @@ from fastapi.testclient import TestClient
 
 from app.api.kline import router
 from app.enriched_generation import EnrichedGenerationUnavailableError
-from app.indicators import czsc_signals as cs
+from app.indicators import chan_signals as cs
 from app.market_time import CN_TZ
 
 
 @pytest.fixture
 def history():
-    pytest.importorskip("czsc")
     rng = np.random.default_rng(2019)
     n = 900
     prices = 20 * np.exp(np.cumsum(rng.normal(0, .025, n)))
@@ -28,30 +27,33 @@ def history():
 
 
 def test_chart_matches_signal_events_and_native_structure(history):
+    from copy import deepcopy
+
+    from app.indicators.chan_runtime import CONFIG
     from app.indicators.czsc_chart import build_chart
+    from app.vendor.chanpy.Chan import CChan
+    from app.vendor.chanpy.ChanConfig import CChanConfig
+    from app.vendor.chanpy.Common.CEnum import KL_TYPE
+    from app.vendor.chanpy.Common.CTime import CTime
+    from app.vendor.chanpy.KLine.KLine_Unit import CKLine_Unit
 
     chart = build_chart(history)
     expected = cs.compute(history, set(cs.SIGNALS))
     for name in cs.SIGNALS:
-        assert [event["date"] for event in chart["signals"] if event["signal_id"] == name] == [
-            day.isoformat() for day in expected.filter(pl.col(name))["date"]
-        ]
+        assert sorted({event["date"] for event in chart["signals"] if event["signal_id"] == name}) == [day.isoformat() for day in expected.filter(pl.col(name))["date"]]
     assert chart["coverage"] == cs.coverage(expected, set(cs.SIGNALS))
-    assert chart["strokes"] and chart["centers"]
-    native = cs._load_runtime()
-    analysis = native.CZSC([
-        native.RawBar(symbol=r["symbol"], id=i, dt=datetime.combine(r["date"], datetime.min.time()),
-                      freq=native.Freq.D, open=r["open"], high=r["high"], low=r["low"],
-                      close=r["close"], vol=r["volume"] * 100, amount=r["amount"])
-        for i, r in enumerate(history.iter_rows(named=True))
-    ], max_bi_num=50, min_bi_len=6)
-    assert [(x["start"], x["start_price"], x["end"], x["end_price"]) for x in chart["strokes"]] == [
-        (b.fx_a.dt.date().isoformat(), b.fx_a.fx, b.fx_b.dt.date().isoformat(), b.fx_b.fx)
-        for b in analysis.finished_bis
-    ]
-    assert [(x["low"], x["high"]) for x in chart["centers"]] == [
-        (z.zd, z.zg) for z in analysis.zs_list if len(z.bis) >= 3 and z.is_valid()
-    ]
+    native = CChan("600000.SH", lv_list=[KL_TYPE.K_DAY], config=CChanConfig(deepcopy(CONFIG)))
+    for row in history.iter_rows(named=True):
+        day = row["date"]
+        unit = CKLine_Unit({"time_key": CTime(day.year, day.month, day.day, 15, 0, auto=False),
+                           **{key: row[key] for key in ("open", "high", "low", "close")},
+                           "volume": row["volume"] * 100, "turnover": row["amount"]})
+        native.trigger_load({KL_TYPE.K_DAY: [unit]})
+    level = native[0]
+    assert [(x["start_price"], x["end_price"]) for x in chart["strokes"]] == [(b.get_begin_val(), b.get_end_val()) for b in level.bi_list if b.is_sure]
+    assert [(x["low"], x["high"]) for x in chart["centers"]] == [(z.low, z.high) for z in level.zs_list if not z.is_one_bi_zs()]
+    assert [(x["start_price"], x["end_price"]) for x in chart["segments"]] == [(s.get_begin_val(), s.get_end_val()) for s in level.seg_list]
+    assert [(x["low"], x["high"]) for x in chart["segment_centers"]] == [(z.low, z.high) for z in level.segzs_list if not z.is_one_bi_zs()]
 
 
 def test_bad_data_splits_structures_and_unclosed_tail_is_excluded(history):
@@ -69,20 +71,16 @@ def test_bad_data_splits_structures_and_unclosed_tail_is_excluded(history):
     assert before_close == prefix
 
 
-def test_center_needs_three_bis_even_when_native_validates():
-    from app.indicators.czsc_chart import structure_snapshot
-
-    analysis = SimpleNamespace(finished_bis=[], fx_list=[], bi_list=[], ubi=None,
-                               zs_list=[SimpleNamespace(bis=[1, 2], is_valid=lambda: True)])
-    assert structure_snapshot(analysis)["centers"] == []
+def test_short_history_does_not_fabricate_centers(history):
+    from app.indicators.czsc_chart import build_chart
+    chart = build_chart(history.head(5))
+    assert chart["centers"] == chart["segment_centers"] == []
 
 
 @pytest.mark.parametrize("timeframe", ["1m", "5m", "30m", "1w"])
 def test_period_chart_matches_native_strokes_and_keeps_signal_prefix(history, timeframe):
-    from app.indicators.czsc_bars import FREQUENCIES
     from app.indicators.czsc_chart import build_chart, structure_snapshot
 
-    native = cs._load_runtime()
     minute = timeframe.endswith("m")
     if minute:
         step = int(timeframe[:-1])
@@ -96,14 +94,10 @@ def test_period_chart_matches_native_strokes_and_keeps_signal_prefix(history, ti
     if minute:
         frame = frame.with_columns(pl.lit(0.0).alias("volume"), pl.lit(0.0).alias("amount"))
     chart = build_chart(frame, timeframe=timeframe)
-    analysis = native.CZSC([
-        native.RawBar(symbol=r["symbol"], id=i,
-                      dt=r["date"] if minute else datetime.combine(r["date"], datetime.min.time().replace(hour=15)),
-                      freq=getattr(native.Freq, FREQUENCIES[timeframe]),
-                      open=r["open"], high=r["high"], low=r["low"], close=r["close"],
-                      vol=r["volume"] * 100, amount=r["amount"])
-        for i, r in enumerate(frame.iter_rows(named=True))
-    ], max_bi_num=50, min_bi_len=6)
+    from app.indicators.chan_runtime import ChanReplay
+    analysis = ChanReplay("600000.SH", timeframe, collect_structure=True)
+    for row in frame.iter_rows(named=True):
+        analysis.update(row)
     assert chart["strokes"] == structure_snapshot(analysis, timeframe)["strokes"]
     assert chart["strokes"] and not chart["invalid_dates"]
     assert ("T" in chart["rows"][0]["date"]) == minute
@@ -128,16 +122,17 @@ class Repo:
         assert readonly
         return self.generation
 
-    def get_daily_published(self, symbol, end, limit, columns):
+    def get_daily_published(self, symbol, end, limit, columns, *, asset_type="stock"):
+        assert asset_type == "stock"
         self.reads += 1
         if self.change_during_read:
             self.generation += "x"
         return self.frame.filter(pl.col("date") <= end).tail(limit)
 
-    def get_minute_chart_generation(self):
+    def get_minute_chart_generation(self, *, provider=None):
         return self.generation
 
-    def get_minute_published(self, symbol, end, limit):
+    def get_minute_published(self, symbol, end, limit, *, provider=None):
         self.reads += 1
         if self.change_during_read:
             self.generation += "x"
@@ -171,7 +166,8 @@ def test_api_errors_empty_and_optional_dependency(history, monkeypatch):
     assert client.get(url, params={"symbol": "../../foo"}).status_code == 422
     ok = client.get(url, params={"symbol": "600000.SH"})
     assert ok.status_code == 200
-    assert ok.json()["rows"] and ok.json()["signals"]
+    assert ok.json()["rows"] and ok.json()["engine"] == "chan.py"
+    assert ok.json()["profile_id"] == cs.PROFILE_ID
     app.state.repo = Repo(history.clear())
     assert client.get(url, params={"symbol": "600000.SH"}).json()["status"] == "empty"
     monkeypatch.setattr(cs, "availability", lambda: {"available": False, "reason": "未安装", "version": None})

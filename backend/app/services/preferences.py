@@ -286,6 +286,11 @@ def get_minute_data_provider() -> str:
     return provider if provider in _allowed_data_providers() else "tickflow"
 
 
+def get_czsc_minute_data_provider() -> str:
+    """CZSC 分钟独立路由; 源不可用时保留选择, 由能力矩阵明确报告。"""
+    return str(load().get("czsc_minute_data_provider") or "exchange_minute").lower()
+
+
 def get_full_minute_data_provider() -> str:
     provider = str(load().get("full_minute_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"

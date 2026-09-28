@@ -46,7 +46,7 @@ from app.backtest.minute_trigger import (
     unsupported_minute_exit_signals,
 )
 from app.config import settings
-from app.indicators import czsc_signals
+from app.indicators import chan_signals
 from app.indicators.pipeline import (
     ENRICHED_STORAGE_COLS,
     INDICATOR_COLUMNS,
@@ -185,7 +185,9 @@ class StrategyDependencyResolver:
     ) -> ResolvedFeaturePlan:
         overrides = overrides or {}
         basic_filter = _basic_filter_for_asset(basic_filter, asset_type)
-        czsc_needed = czsc_signals.validate_usage(
+        if reason := chan_signals.retirement_reason(strategy, overrides):
+            raise ValueError(reason)
+        czsc_needed = chan_signals.validate_usage(
             [*entry_signals, *exit_signals, *strategy.required_features],
             asset_type=asset_type,
             execution_backend=strategy.execution_backend,
@@ -233,7 +235,7 @@ class StrategyDependencyResolver:
                 strategy.meta.get("id", "<unknown>"),
             )
             required_features.update(INDICATOR_COLUMNS)
-            required_signals.update(set(signal_dependencies) - czsc_signals.SIGNALS.keys())
+            required_signals.update(set(signal_dependencies) - chan_signals.SIGNALS.keys())
             required_signals.update(LIMIT_SIGNAL_OUTPUTS)
 
         unknown_signals = required_signals - set(signal_dependencies) - set(LIMIT_SIGNAL_OUTPUTS)
@@ -266,7 +268,7 @@ class StrategyDependencyResolver:
             required_signals=frozenset(required_signals),
             warmup_bars=max(
                 60, int(strategy.lookback_days or 1), scoring_warmup_bars(scoring),
-                czsc_signals.WARMUP_BARS if czsc_needed else 0,
+                chan_signals.WARMUP_BARS if czsc_needed else 0,
             ),
         )
         return ResolvedFeaturePlan(
@@ -1166,14 +1168,16 @@ class StrategyBacktestService:
         if overlay_conditions and s.execution_backend in ("composite", "minute_filter"):
             return _err(f"叠加条件不支持 {s.execution_backend} 策略")
         try:
-            czsc_signals.validate_usage(
+            if reason := chan_signals.retirement_reason(s, overrides):
+                return _err(reason)
+            chan_signals.validate_usage(
                 [*entry_signals, *exit_signals, *s.required_features],
                 asset_type=config.asset_type, execution_backend=s.execution_backend,
             )
-            if czsc_signals.selected([*entry_signals, *s.required_features]) and config.entry_fill != "open_t+1":
-                return _err("CZSC 日线入场信号在收盘后确认, 入场成交须选择次交易日开盘")
-            if czsc_signals.selected(exit_signals) and config.exit_fill != "open_t+1":
-                return _err("CZSC 日线出场信号在收盘后确认, 出场成交须选择次交易日开盘")
+            if chan_signals.selected([*entry_signals, *s.required_features]) and config.entry_fill != "open_t+1":
+                return _err("chan.py 日线入场信号在收盘后确认, 入场成交须选择次交易日开盘")
+            if chan_signals.selected(exit_signals) and config.exit_fill != "open_t+1":
+                return _err("chan.py 日线出场信号在收盘后确认, 出场成交须选择次交易日开盘")
         except ValueError as e:
             return _err(str(e))
         if config.exit_fill == "signal_next_minute":
@@ -1380,15 +1384,15 @@ class StrategyBacktestService:
                     cancel_event=cancel_event,
                     czsc_max_workers=4,
                 )
-            except czsc_signals.CzscReplayCancelledError:
+            except chan_signals.ChanReplayCancelledError:
                 return _err("cancelled")
             except (ValueError, pl.exceptions.PolarsError) as e:
                 return _err(f"回测特征准备失败: {e}")
             timing_ms["load_panel"] = round((time.perf_counter() - t_load) * 1000, 1)
             if panel.is_empty():
                 return _err("无数据，请检查日期范围或先运行盘后管道")
-            if czsc_signals.selected(feature_plan.signal_columns):
-                czsc_diagnostics = czsc_signals.coverage(
+            if chan_signals.selected(feature_plan.signal_columns):
+                czsc_diagnostics = chan_signals.coverage(
                     panel.filter(self._date_range_mask(panel, config.start, config.end)),
                     feature_plan.signal_columns,
                 )

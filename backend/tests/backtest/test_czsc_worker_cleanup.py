@@ -10,7 +10,7 @@ from app.backtest import worker
 
 
 def _watched_replay_child(ready):
-    from app.indicators.czsc_signals import _init_replay_worker
+    from app.indicators.chan_signals import _init_replay_worker
 
     _init_replay_worker(mp.get_context("spawn").Event())
     ready.set()
@@ -52,7 +52,6 @@ def test_hard_cancel_stops_nested_replay_process(monkeypatch, tmp_path):
 
 
 def test_replay_child_exits_if_outer_worker_crashes(monkeypatch, tmp_path):
-    pytest.importorskip("czsc")
     monkeypatch.setattr(worker, "_worker_entry", _uncooperative_worker)
     children = []
 

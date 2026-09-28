@@ -17,8 +17,12 @@ export interface BuiltinSignalDefinition {
   description: string
 }
 
-export const CZSC_SIGNAL_EXPLANATION = 'CZSC 1.0.1 原生辅助判定，仅用于 A 股股票已收盘日线。各信号从不成立变为成立时触发一次，持续成立不重复触发；首次可计算时只建立基线。信号记录在识别日，不回填笔端点。辅助名称不代表严格缠论买卖点确认。'
-export const CZSC_MONITOR_UNSUPPORTED = 'CZSC 日线辅助信号暂不支持盘中监控'
+export const CHAN_SIGNAL_EXPLANATION = 'chan.py 笔级算法确认信号：每根已收盘 K 线后确认进入保留区的买卖点，同一点只触发一次。首次就绪仅建立基线，事件写在确认日，不回填端点。端点、首见和确认时间可在结构图核对；算法结果不代表严格原文判定。'
+export const CHAN_MONITOR_UNSUPPORTED = 'chan.py 日线确认信号暂不支持盘中监控'
+export const LEGACY_CZSC_WARNING = '旧 CZSC 策略已停用，原配置和历史结果保留；请使用独立的 chan.py 新策略'
+export const CHAN_BSP_LABELS: Record<string, string> = { '1': '一类', '1p': '盘整背驰', '2': '二类', '2s': '类二', '3a': '三类A', '3b': '三类B' }
+export const CHAN_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = Object.entries(CHAN_BSP_LABELS).flatMap(([type, label]) =>
+  (['buy', 'sell'] as const).map(side => ({ id: `signal_chan_bi_${type}_${side}`, name: `chan.py 笔级${label}${side === 'buy' ? '买' : '卖'}确认`, kind: side === 'buy' ? 'entry' as const : 'exit' as const, category: 'chan.py', description: CHAN_SIGNAL_EXPLANATION })))
 
 export const CZSC_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
   { id: 'signal_czsc_first_buy', name: 'CZSC一买辅助', kind: 'entry', category: 'CZSC', description: 'V221126：CZSC 原生一买辅助判定，基于笔结构识别候选形态。' },
@@ -29,18 +33,20 @@ export const CZSC_SIGNAL_DEFINITIONS: BuiltinSignalDefinition[] = [
   { id: 'signal_czsc_third_sell', name: 'CZSC均线三卖辅助', kind: 'exit', category: 'CZSC', description: 'V230318，固定 SMA34：结合笔结构与均线的原生三卖辅助判定。' },
 ]
 
-export const normalizeCzscSignalId = (id: string) => id.startsWith('czsc_') ? `signal_${id}` : id
-export const isCzscSignal = (id: string) => normalizeCzscSignalId(id).startsWith('signal_czsc_')
+export const normalizeStructureSignalId = (id: string) => (id.startsWith('czsc_') || id.startsWith('chan_')) ? `signal_${id}` : id
+export const isStructureSignal = (id: string) => /^signal_(czsc|chan)_/.test(normalizeStructureSignalId(id))
 
-export function czscStrategyUnsupportedReason(executionBackend?: string): string | null {
+export const isLegacyCzscSignal = (id: string) => normalizeStructureSignalId(id).startsWith('signal_czsc_')
+
+export function chanStrategyUnsupportedReason(executionBackend?: string): string | null {
   if (!executionBackend || executionBackend === 'polars_expr') return null
   const label: Record<string, string> = {
     matrix_native: '矩阵策略', composite: '叠加策略', minute_filter: '分钟策略', python_history_legacy: '历史 Python 策略',
   }
-  return `CZSC 首版仅支持普通日线策略，${label[executionBackend] ?? '当前策略类型'}不支持 CZSC 外部触发器`
+  return `chan.py 首版仅支持普通日线策略，${label[executionBackend] ?? '当前策略类型'}不支持 chan.py 外部触发器`
 }
 
-export const CZSC_COVERAGE_REASON_LABELS: Record<string, string> = {
+export const STRUCTURE_COVERAGE_REASON_LABELS: Record<string, string> = {
   insufficient_structure: '笔结构不足',
   missing_data: '数据缺失',
   unclosed_bar: '日线尚未收盘',
@@ -59,7 +65,7 @@ export const MONITOR_INTRADAY_SIGNAL_OPTIONS = Object.keys(MONITOR_INTRADAY_SIGN
 /** 盘中信号 → 中文标签 (日线信号标签由用户定义提供, 不在此表) */
 export const SIGNAL_LABELS: Record<string, string> = {
   ...MONITOR_INTRADAY_SIGNAL_LABELS,
-  ...Object.fromEntries(CZSC_SIGNAL_DEFINITIONS.map(signal => [signal.id, signal.name])),
+  ...Object.fromEntries([...CHAN_SIGNAL_DEFINITIONS, ...CZSC_SIGNAL_DEFINITIONS].map(signal => [signal.id, signal.name])),
 }
 
 /** 常用技术指标/字段 → 中文 (阈值条件展示用, 与后端 ENRICHED_COLUMNS 对齐) */
@@ -89,5 +95,7 @@ const FIELD_LABELS: Record<string, string> = {
  */
 export function cnSignal(name: string, customNames?: Record<string, string>): string {
   if (customNames && name in customNames) return customNames[name]
-  return SIGNAL_LABELS[normalizeCzscSignalId(name)] ?? FIELD_LABELS[name] ?? name
+  const match = name.match(/^signal_chan_seg_(1p?|2s?|3[ab])_(buy|sell)$/)
+  if (match) return `chan.py 线段级${CHAN_BSP_LABELS[match[1]]}${match[2] === 'buy' ? '买' : '卖'}确认`
+  return SIGNAL_LABELS[normalizeStructureSignalId(name)] ?? FIELD_LABELS[name] ?? name
 }

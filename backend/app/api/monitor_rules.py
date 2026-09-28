@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app.indicators import czsc_signals
+from app.indicators import chan_signals
 from app.strategy import config as strategy_config
 from app.strategy import monitor_rules
 from app.strategy.intraday_signals import INTRADAY_SIGNAL_LABELS, uses_intraday_signals
@@ -338,9 +338,9 @@ def save_rule(req: RuleModel, request: Request):
                 )
                 if warning:
                     raise ValueError(warning)
-        elif czsc_signals.selected(c.get("field") for c in rule.get("conditions", [])):
+        elif chan_signals.selected(c.get("field") for c in rule.get("conditions", [])):
             # truth 条件的既有校验只认 signal_ 前缀, 不能阻止日线 CZSC 信号。
-            raise ValueError(czsc_signals.MONITOR_WARNING)
+            raise ValueError(chan_signals.MONITOR_WARNING)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if rule.get("scope") == "watchlist_group":

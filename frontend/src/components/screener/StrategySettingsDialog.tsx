@@ -14,7 +14,7 @@ import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { ConditionEditor } from '@/components/signals/ConditionEditor'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
-import { CZSC_MONITOR_UNSUPPORTED, czscStrategyUnsupportedReason, isCzscSignal } from '@/lib/signals'
+import { CHAN_MONITOR_UNSUPPORTED, chanStrategyUnsupportedReason, isStructureSignal } from '@/lib/signals'
 
 // 内置列名 → 中文标签
 const FIELD_LABEL: Record<string, string> = {}
@@ -605,8 +605,8 @@ export function StrategySettingsDialog({ strategyId, assetType = 'stock', onClos
             <div className="flex flex-1 items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
           ) : detail ? (
             <>
-              {czscStrategyUnsupportedReason(detail.execution_backend) && (
-                <p className="px-5 text-[11px] text-warning">{czscStrategyUnsupportedReason(detail.execution_backend)}</p>
+              {chanStrategyUnsupportedReason(detail.execution_backend) && (
+                <p className="px-5 text-[11px] text-warning">{chanStrategyUnsupportedReason(detail.execution_backend)}</p>
               )}
               {/* 名称 + 描述 + 显示上限 */}
               <div className="flex items-center gap-4 border-b border-border/40 px-5 py-2.5">
@@ -855,8 +855,8 @@ export function StrategySettingsDialog({ strategyId, assetType = 'stock', onClos
                           <div className="space-y-2">
                             <SignalPicker signals={exitSignals} onChange={setExitSignals} kind="exit" options={{ variant: 'dialog', assetType, executionBackend: detail.execution_backend }} />
                             <div className="text-[10px] leading-4 text-muted/70">任一出场点满足即触发出场。</div>
-                            {[...entrySignals, ...exitSignals, ...(detail.required_features ?? [])].some(isCzscSignal) && (
-                              <p className="text-[10px] text-warning">{CZSC_MONITOR_UNSUPPORTED}。回测中引用 CZSC 的一侧须使用次交易日开盘成交。</p>
+                            {[...entrySignals, ...exitSignals, ...(detail.required_features ?? [])].some(isStructureSignal) && (
+                              <p className="text-[10px] text-warning">{CHAN_MONITOR_UNSUPPORTED}。回测中引用 chan.py 的一侧须使用次交易日开盘成交。</p>
                             )}
                           </div>
                         </Card>

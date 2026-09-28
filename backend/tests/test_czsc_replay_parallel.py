@@ -8,13 +8,12 @@ import numpy as np
 import polars as pl
 import pytest
 
-from app.indicators import czsc_signals as cs
+from app.indicators import chan_signals as cs
 from app.market_time import CN_TZ
 
 
 @pytest.fixture
 def history():
-    pytest.importorskip("czsc")
     rng = np.random.default_rng(2019)
     n = 900
     prices = 20 * np.exp(np.cumsum(rng.normal(0, .025, n)))
@@ -32,33 +31,10 @@ def history():
     return pl.concat([frame, broken, frame.with_columns(pl.lit("600002.SH").alias("symbol"))]).reverse()
 
 
-def test_readiness_reads_the_native_structure_once_per_bar(monkeypatch):
-    reads = []
-
-    class Analysis:
-        def __init__(self, bars, **kwargs):
-            self.last = bars[-1]
-
-        def update(self, bar):
-            self.last = bar
-
-        @property
-        def bi_list(self):
-            reads.append(self.last.id)
-            return []
-
-    monkeypatch.setattr(cs, "_load_runtime", lambda: SimpleNamespace(
-        CZSC=Analysis, RawBar=lambda **kw: SimpleNamespace(**kw), Freq=SimpleNamespace(D="日线"),
-    ))
-    frame = pl.DataFrame({
-        "symbol": ["600000.SH"] * 4,
-        "date": [date(2024, 1, i) for i in range(1, 5)],
-        "open": [10.] * 4, "close": [10.] * 4, "high": [11.] * 4, "low": [9.] * 4,
-        "volume": [100.] * 4, "amount": [100000.] * 4,
-    })
-    result = cs.compute(frame, set(cs.SIGNALS))
-    assert reads == [0, 1, 2, 3]
-    assert all(result[name].null_count() == 4 for name in cs.SIGNALS)
+def test_empty_selection_does_not_construct_runtime(monkeypatch):
+    monkeypatch.setattr(cs, "_load_runtime", lambda: pytest.fail("unrequested engine loaded"))
+    frame = pl.DataFrame()
+    assert cs.compute(frame, set()).equals(frame)
 
 
 def test_spawned_replay_matches_serial_with_gaps_order_and_unclosed_tail(history, monkeypatch):
@@ -71,8 +47,8 @@ def test_spawned_replay_matches_serial_with_gaps_order_and_unclosed_tail(history
     result = cs.compute(history, wanted, now=cutoff, max_workers=4, progress_cb=progress.append)
     assert result.equals(expected)
     assert cs.coverage(result, wanted) == cs.coverage(expected, wanted)
-    assert progress[0] == {"phase": "czsc_signals", "completed": 0, "total": 3}
-    assert progress[-1] == {"phase": "czsc_signals", "completed": 3, "total": 3}
+    assert progress[0] == {"phase": "chan_signals", "completed": 0, "total": 3}
+    assert progress[-1] == {"phase": "chan_signals", "completed": 3, "total": 3}
     assert [p["completed"] for p in progress] == sorted(p["completed"] for p in progress)
     assert {p.pid for p in mp.active_children()} <= before
 
@@ -89,7 +65,7 @@ def test_cancellation_returns_no_partial_signals_and_reaps_children(history, mon
         if message["completed"] > 0:
             event.set()
 
-    with pytest.raises(cs.CzscReplayCancelledError):
+    with pytest.raises(cs.ChanReplayCancelledError):
         cs.compute(history, set(cs.SIGNALS), max_workers=4 if parallel else 1,
                    cancel_event=event, progress_cb=progress)
     assert {p.pid for p in mp.active_children()} <= before
@@ -99,7 +75,7 @@ def test_cancel_before_start_does_not_load_runtime(history, monkeypatch):
     event = threading.Event()
     event.set()
     monkeypatch.setattr(cs, "_load_runtime", lambda: pytest.fail("cancelled work loaded CZSC"))
-    with pytest.raises(cs.CzscReplayCancelledError):
+    with pytest.raises(cs.ChanReplayCancelledError):
         cs.compute(history, set(cs.SIGNALS), cancel_event=event, max_workers=4)
 
 

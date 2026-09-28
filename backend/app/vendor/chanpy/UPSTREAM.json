@@ -1,0 +1,194 @@
+{
+  "repository": "https://github.com/Vespa314/chan.py",
+  "commit": "429d6ed3043e27c93a003ba2b10e70a05575e1f5",
+  "modifications": [
+    "Prefix internal absolute imports with app.vendor.chanpy; no algorithm changes.",
+    "Only calculation core and abstract data API included; network and plotting adapters omitted."
+  ],
+  "files": {
+    "Chan.py": {
+      "upstream_sha256": "124222303ceceed0e4450f5e93e82c1b873a9222f3c3265ddbd3d90d0bb16315",
+      "vendored_sha256": "894a278e9e930f1e4646ba28e518c9ed51f5a9870036b7b154d86365c8de484a"
+    },
+    "ChanConfig.py": {
+      "upstream_sha256": "bff01933dae1420548e4b5b9f65e8aa385c69d01d09aea6a6caa545f0564b2e2",
+      "vendored_sha256": "c7882f91b10199fd97d34084ea4fb3266108e6507e6104fc2ff14eb36955569b"
+    },
+    "DataAPI/CommonStockAPI.py": {
+      "upstream_sha256": "92f9e4529eb7dad32a948f33682c447c9458dd336932cbf9141f4d1bbe32b06e",
+      "vendored_sha256": "206edba13333b850b92b3daf67bc5e67a612369ba709c85d491faf2c51ccee7b"
+    },
+    "Bi/Bi.py": {
+      "upstream_sha256": "9e7231c7376df8c29edd9616b1fde99928064b24031cda84daaa7329dcc70ad4",
+      "vendored_sha256": "9a1a0c10b8fedd2034f7cd3f40f3e2466f689980b980e1bf3319d5504f1a77c1"
+    },
+    "Bi/BiConfig.py": {
+      "upstream_sha256": "14ac8f13578207acf2681d0ccf5c1a3deb4bc230332cba2db8cfc9e4c72c18ca",
+      "vendored_sha256": "cf06900870d55cea55526afb200662f2b57dac1cc42abbaf4f0c2c23b14928dc"
+    },
+    "Bi/BiList.py": {
+      "upstream_sha256": "d8386099f71a27fb86b4ee17a5f6b4f6dd805a9f4ad4ec29e9fcc76594114a65",
+      "vendored_sha256": "c5a99fc43fa36179018fe15c34ed3a18f6fe476fc99a43dff106521d7bf5ee51"
+    },
+    "BuySellPoint/BSPointConfig.py": {
+      "upstream_sha256": "d30580f5aefa8b2abe9f7a92ce73bbbf914e2338317ec9cf13ddd2ef5b75e824",
+      "vendored_sha256": "504a8f73d6229ba7dc8161030391a37b0879d53e04001065f0b0613271fbcb01"
+    },
+    "BuySellPoint/BSPointList.py": {
+      "upstream_sha256": "71a7047ada743f91493c6d6f71eeda6fbc275099dc4cb01d29531b4abdc2461e",
+      "vendored_sha256": "1d060951fd2d160ebba9b80e6cc5e675b78546817feedd2531c9b758a09dc851"
+    },
+    "BuySellPoint/BS_Point.py": {
+      "upstream_sha256": "7b9eb6e6c0ab3a2a6f2e862a37cfdea0d862713371950c968406d16d5ba811a7",
+      "vendored_sha256": "0926a7f12012c817000e1a21c4ef0d4078210447341a9170c7d7f445927441a2"
+    },
+    "BuySellPoint/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ChanModel/Features.py": {
+      "upstream_sha256": "457ed7e581b36b8be7ba497143ba41c973d15f199456e5a16f642681896f71bf",
+      "vendored_sha256": "457ed7e581b36b8be7ba497143ba41c973d15f199456e5a16f642681896f71bf"
+    },
+    "Combiner/Combine_Item.py": {
+      "upstream_sha256": "d25ae4ca8fc6545ef457a0aeb0597915e818981f818e6bb149eccdd6f69d70b9",
+      "vendored_sha256": "959a5a0a49ffc88d06efcfbe15114f12c3540b335eb5c76a85f3f3c6a10f5521"
+    },
+    "Combiner/KLine_Combiner.py": {
+      "upstream_sha256": "260b1ca210a81fbd0cf1acd9cbbf3eb14be7972652bbfe0c19a4eda3e0895bbb",
+      "vendored_sha256": "ca3db44a1aeb19f85c3d96ee5460782ee3a4e616ed36149ecd3ea1226f3c2361"
+    },
+    "Combiner/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "Common/CEnum.py": {
+      "upstream_sha256": "f08c6a321c6b52b9156761f7aac59b287f800a5094b32a416f1d50ad419afbab",
+      "vendored_sha256": "f08c6a321c6b52b9156761f7aac59b287f800a5094b32a416f1d50ad419afbab"
+    },
+    "Common/CTime.py": {
+      "upstream_sha256": "1219b484bf269d70fd9ce612dd2dc5f7553745cac6af044e3113c934f548955a",
+      "vendored_sha256": "1219b484bf269d70fd9ce612dd2dc5f7553745cac6af044e3113c934f548955a"
+    },
+    "Common/ChanException.py": {
+      "upstream_sha256": "a135bf74a795ca59f342f5793771dab3abe977c2ada9ef56c0b3c1fa0dad59bd",
+      "vendored_sha256": "a135bf74a795ca59f342f5793771dab3abe977c2ada9ef56c0b3c1fa0dad59bd"
+    },
+    "Common/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "Common/cache.py": {
+      "upstream_sha256": "608e151adfebaa5a6c75439be0d0a0f169100c72b7ee4aebfefb2e68666431bf",
+      "vendored_sha256": "608e151adfebaa5a6c75439be0d0a0f169100c72b7ee4aebfefb2e68666431bf"
+    },
+    "Common/func_util.py": {
+      "upstream_sha256": "a3440f16ce8e1ded8e973f568a331969c8e54922e411fd8928425e0949d30740",
+      "vendored_sha256": "a3440f16ce8e1ded8e973f568a331969c8e54922e411fd8928425e0949d30740"
+    },
+    "KLine/KLine.py": {
+      "upstream_sha256": "ff2be1d0311d33154efac817facdb1f6e9eb864afb42b0ec048169019417d93e",
+      "vendored_sha256": "f76da33a7158fa1175225a9e31a90beac81eab11b42db8834b8ba4510226a7af"
+    },
+    "KLine/KLine_List.py": {
+      "upstream_sha256": "ab518c1664e2dc8f3e359ac344eac3fc7c5d0758f13976d7b337fb4275d7d0fc",
+      "vendored_sha256": "9891743cef308f87e5ded5750ae88ff38429c2cdbaa52beafcc2bc1d5f5e919e"
+    },
+    "KLine/KLine_Unit.py": {
+      "upstream_sha256": "b46ee1e61286059696b13d09cdae2a78d6ff563a113a64e01a890a4688fe9838",
+      "vendored_sha256": "9df29349ffc4582be3432a105a5db6b65b208d3265e8e6ead275c7e8dbb3a219"
+    },
+    "KLine/TradeInfo.py": {
+      "upstream_sha256": "bd0bf8015d3369a6021c5f00c419f29708f0b53a88a695931b1304802cc85325",
+      "vendored_sha256": "f1a1e2d19e44b5cc7ac2b3d629590d41986d501f0382a0e3d6f50932cce88899"
+    },
+    "KLine/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "Math/BOLL.py": {
+      "upstream_sha256": "79cbdf1fe94ec04c012edebacc37dd2ac8a841fc827b6a6e2358fe9f9ddce57d",
+      "vendored_sha256": "79cbdf1fe94ec04c012edebacc37dd2ac8a841fc827b6a6e2358fe9f9ddce57d"
+    },
+    "Math/Demark.py": {
+      "upstream_sha256": "7c042c2d18de68866f3629d622f517c4d8cc87e474e7c12d7a0dd0f79a821d88",
+      "vendored_sha256": "4e010f5fc0d0322084f332dbf02950af5cdad54ead5826792ed319949573c349"
+    },
+    "Math/KDJ.py": {
+      "upstream_sha256": "e80574b46986861de8ca3bc047f9cc163b575fde67a0025a314d2b20fcbf8df6",
+      "vendored_sha256": "e80574b46986861de8ca3bc047f9cc163b575fde67a0025a314d2b20fcbf8df6"
+    },
+    "Math/MACD.py": {
+      "upstream_sha256": "7f303f2b686deaa1d7f0d0bbbf3593f817ea355e2427d569fc43b2bdccddf268",
+      "vendored_sha256": "7f303f2b686deaa1d7f0d0bbbf3593f817ea355e2427d569fc43b2bdccddf268"
+    },
+    "Math/RSI.py": {
+      "upstream_sha256": "8f0aaa54634ebcd2e3d24f1aace04d9221dfa28e07391865e64bf2b975ac12bc",
+      "vendored_sha256": "8f0aaa54634ebcd2e3d24f1aace04d9221dfa28e07391865e64bf2b975ac12bc"
+    },
+    "Math/TrendLine.py": {
+      "upstream_sha256": "8b862ef26eaf29796b1076c82e553e60b0b8265be49b22e490e447b8fde62235",
+      "vendored_sha256": "5e40787a046013b8259c0dbbc441798a1d436c8ee1641384392a4d83d73c2dad"
+    },
+    "Math/TrendModel.py": {
+      "upstream_sha256": "10dd50d7a552a57a72ada55fb0a8a8c35356a1b73d2eb58517724b48387f4c88",
+      "vendored_sha256": "767d53647b0a517d894fcefefdf353cd03c9864a92f3b5cfb0ff9e3afbe20410"
+    },
+    "Math/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "Seg/Eigen.py": {
+      "upstream_sha256": "3b45589347fe1e4369597dde9919df059a4ee3b0b90eeb126179caf015fb595d",
+      "vendored_sha256": "421f0b3d3600f6b1f343c1f2c02d384046f167b5ccb385de3ad7ba612c22e632"
+    },
+    "Seg/EigenFX.py": {
+      "upstream_sha256": "f98f87f8cdf5ce59b059e7a8ed6406f6f5be5e68fd9f4b66fca9c6f860ede06f",
+      "vendored_sha256": "0c664a26e299d576763a384154e3df2bb33bea28015c2e77bc951a16602b22c7"
+    },
+    "Seg/Seg.py": {
+      "upstream_sha256": "d54059efdc64e29baea9bfee6e2dbac6057d93e87d2fc6bbdf4c4a6a475b28ef",
+      "vendored_sha256": "6a842c9d356773a2872f78ae90c4d7f81da08a2654e9776844bf0cede27c8b53"
+    },
+    "Seg/SegConfig.py": {
+      "upstream_sha256": "4ffa9974f01c4801c6083784205b3ef973e3d88cbf34d236fa327d4f7ddac94e",
+      "vendored_sha256": "3b903b1f465e4a360588c2522f5fddff22e759d5889fa539ffbc7731edb53b09"
+    },
+    "Seg/SegListChan.py": {
+      "upstream_sha256": "49719e6843d424768ae6295c87617c2c72f22c478deac74067ef40aaf531c5c9",
+      "vendored_sha256": "6cbfd0cf6f192635a2dc651a6d09f9e6b4150a57fa2c5dc63e292c7d8fd5c1b2"
+    },
+    "Seg/SegListComm.py": {
+      "upstream_sha256": "fa89e9f9f1161192c9adce4b76b4103f12e7ffbdaf029a5ca247394666b7e482",
+      "vendored_sha256": "7499717b902448e250745c4d060d1b48cd1286da784c724cdd0d375110b04abb"
+    },
+    "Seg/SegListDYH.py": {
+      "upstream_sha256": "688cf070b38d76e89dd428b8d2c5cbeaf0985102c8faa3741b6571e14b3bed1d",
+      "vendored_sha256": "7d3e276d5eafd529a5e533d73b55cb54ac40d69a89d9201a9d118a4e8221461b"
+    },
+    "Seg/SegListDef.py": {
+      "upstream_sha256": "1cf3f8e5aabc24e459b24eadd0f1ac62057b4f283d53fc3e6ba9c6fa9eafb991",
+      "vendored_sha256": "5e7c0cf2374e6acbd096b550ec64485e148d3033caa9e6ba128e93c76d0e77ba"
+    },
+    "Seg/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ZS/ZS.py": {
+      "upstream_sha256": "c08a6c1f1be038c8f77703678dd5c62f0e91a3c66ba210c7e3e4d8c6fe2d7e9b",
+      "vendored_sha256": "df591ad6acef0b72d7f4987de1454bcc164758f660490aa3c015859f9accf995"
+    },
+    "ZS/ZSConfig.py": {
+      "upstream_sha256": "592c3a1c22a4f873e25270a22e28d11bd0b42a42bdefc24d7dc114d03ae2984e",
+      "vendored_sha256": "592c3a1c22a4f873e25270a22e28d11bd0b42a42bdefc24d7dc114d03ae2984e"
+    },
+    "ZS/ZSList.py": {
+      "upstream_sha256": "e0cba975e6a3b73c2e09102c80d8daca26adb3c8f0bc742f6c0fc526703a86ee",
+      "vendored_sha256": "9c1cf2526ab554964c81866e5f8c6b7f090b957c9a34312e135a2befc1b7a70e"
+    },
+    "ZS/__init__.py": {
+      "upstream_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "vendored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

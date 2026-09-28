@@ -17,6 +17,7 @@ DEFAULT_CURRENT = {
     "daily_data_provider": "tickflow",
     "adj_factor_provider": "tickflow",
     "minute_data_provider": "tickflow",
+    "czsc_minute_data_provider": "tickflow",
     "full_minute_data_provider": "tickflow",
     "depth5_data_provider": "tickflow",
     "realtime_data_provider": "tickflow",
@@ -33,6 +34,20 @@ def _by_id(matrix: dict) -> dict[str, dict]:
     return {c["id"]: c for c in matrix["capabilities"]}
 
 
+def test_czsc_minute_uses_minute_dataset_with_an_independent_route(monkeypatch):
+    _fake_sources(monkeypatch, [
+        {"name": name, "display_name": name, "datasets": ["minute"], "available": True, "status": "ok"}
+        for name in ["stocksdk", "exchange_minute"]
+    ])
+    caps = _by_id(build_capability_matrix({
+        "minute_data_provider": "stocksdk", "czsc_minute_data_provider": "exchange_minute",
+    }, tickflow_tier="free"))
+    assert caps["minute"]["effective"] == "stocksdk"
+    assert caps["czsc_minute"]["effective"] == "exchange_minute"
+    assert caps["minute"]["usable"] and caps["czsc_minute"]["usable"]
+    assert {c["name"] for c in caps["czsc_minute"]["candidates"]} == {"stocksdk", "exchange_minute"}
+
+
 def test_registry_covers_all_routing_fields():
     """注册表是能力的单一权威: 可路由能力与偏好键一一对应、无重复;
     full_minute 为不可路由能力 (field=None, 仅 TickFlow Expert 提供)。"""
@@ -40,13 +55,13 @@ def test_registry_covers_all_routing_fields():
     assert sorted(routable) == sorted(DEFAULT_CURRENT)
     assert len(set(routable)) == len(routable)
     assert {c["id"] for c in CAPABILITY_REGISTRY} == {
-        "realtime", "daily", "minute", "full_minute", "depth5", "adj_factor", "financial",
+        "realtime", "daily", "minute", "czsc_minute", "full_minute", "depth5", "adj_factor", "financial",
     }
     full_minute = next(c for c in CAPABILITY_REGISTRY if c["id"] == "full_minute")
     assert full_minute["field"] == "full_minute_data_provider"
     assert full_minute["tf_tier"] == "expert"
     for cap in CAPABILITY_REGISTRY:
-        assert cap["default"] == "tickflow"
+        assert cap["default"] == ("exchange_minute" if cap["id"] == "czsc_minute" else "tickflow")
         assert cap["tf_tier"] in ("none", "starter", "pro", "expert")
         assert "follow" not in cap
 
@@ -56,7 +71,7 @@ def test_matrix_without_third_party_sources(monkeypatch):
     _fake_sources(monkeypatch, [])
     matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="expert")
     assert matrix["tickflow_tier"] == "expert"
-    assert len(matrix["capabilities"]) == 7
+    assert len(matrix["capabilities"]) == 8
     for cap in matrix["capabilities"]:
         names = [c["name"] for c in cap["candidates"]]
         assert names == ["tickflow"]
@@ -285,6 +300,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "realtime_data_provider": "rt-src",
         "daily_data_provider": "daily-src",
         "minute_data_provider": "min-src",
+        "czsc_minute_data_provider": "czsc-src",
         "full_minute_data_provider": "fm-src",
         "depth5_data_provider": "d5-src",
         "adj_factor_provider": "adj-src",
@@ -294,6 +310,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "realtime_data_provider": "get_realtime_data_provider",
         "daily_data_provider": "get_daily_data_provider",
         "minute_data_provider": "get_minute_data_provider",
+        "czsc_minute_data_provider": "get_czsc_minute_data_provider",
         "full_minute_data_provider": "get_full_minute_data_provider",
         "depth5_data_provider": "get_depth5_data_provider",
         "adj_factor_provider": "get_adj_factor_provider",

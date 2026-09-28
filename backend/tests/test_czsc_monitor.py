@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api import monitor_rules as monitor_api
 from app.config import settings
-from app.indicators import czsc_signals
+from app.indicators import chan_signals
 from app.strategy import config, monitor_rules
 from app.strategy.engine import StrategyEngine, StrategyResult
 from app.strategy.monitor import MonitorRuleEngine
@@ -48,8 +48,8 @@ def env(tmp_path, monkeypatch):
     # 任何导入原生组件或重算的尝试都使测试失败, 即使业务层吞掉异常。
     runtime = Mock(side_effect=AssertionError("盘中禁止加载 CZSC"))
     compute = Mock(side_effect=AssertionError("盘中禁止重算 CZSC"))
-    monkeypatch.setattr(czsc_signals, "_load_runtime", runtime)
-    monkeypatch.setattr(czsc_signals, "compute", compute)
+    monkeypatch.setattr(chan_signals, "_load_runtime", runtime)
+    monkeypatch.setattr(chan_signals, "compute", compute)
     strategy = _strategy()
     strategies = {"demo": strategy, "ordinary": _strategy("ordinary")}
     engine = Mock()
@@ -86,45 +86,45 @@ def env(tmp_path, monkeypatch):
 ])
 def test_save_rejects_czsc_from_effective_strategy_dependencies(env, source):
     if source == "entry":
-        env.strategy.entry_signals = ["signal_czsc_first_buy"]
+        env.strategy.entry_signals = ["signal_chan_bi_1_buy"]
     elif source == "exit":
-        env.strategy.exit_signals = ["signal_czsc_first_sell"]
+        env.strategy.exit_signals = ["signal_chan_bi_1_sell"]
     elif source == "required":
-        env.strategy.required_features = frozenset({"signal_czsc_third_buy"})
+        env.strategy.required_features = frozenset({"signal_chan_bi_3a_buy"})
         config.save_override(env.path, "demo", {"entry_signals": [], "exit_signals": []})
     elif source == "fallback_entry":
-        env.strategy.entry_signals = ["signal_czsc_first_buy"]
+        env.strategy.entry_signals = ["signal_chan_bi_1_buy"]
         config.save_override(env.path, "demo", {"entry_signals": None})
     else:
         config.save_override(env.path, "demo", {
-            f"{source.removeprefix('override_')}_signals": ["czsc_second_sell"],
+            f"{source.removeprefix('override_')}_signals": ["chan_bi_2_sell"],
         })
 
     response = env.client.post("/api/monitor-rules", json=_rule())
     assert response.status_code == 400
-    assert response.json()["detail"] == czsc_signals.MONITOR_WARNING
+    assert response.json()["detail"] == chan_signals.MONITOR_WARNING
     assert monitor_rules.load_all(env.path) == []
     assert env.monitor.rule_count == 0
     # 即使默认只保存为停用规则, 也不能新建不受支持的盘中监控。
     assert env.client.post("/api/monitor-rules", json=_rule(enabled=False)).status_code == 400
     monitor_rules.save_one(env.path, _rule())
-    assert env.client.get("/api/monitor-rules").json()["rules"][0]["runtime_warning"] == czsc_signals.MONITOR_WARNING
+    assert env.client.get("/api/monitor-rules").json()["rules"][0]["runtime_warning"] == chan_signals.MONITOR_WARNING
 
 
 def test_legacy_rule_warning_rejects_enable_but_allows_disabling(env):
     legacy = _rule()
     monitor_rules.save_one(env.path, legacy)
-    config.save_override(env.path, "demo", {"exit_signals": ["signal_czsc_third_sell"]})
+    config.save_override(env.path, "demo", {"exit_signals": ["signal_chan_bi_3a_sell"]})
 
     listed = env.client.get("/api/monitor-rules").json()["rules"]
-    assert listed[0]["runtime_warning"] == czsc_signals.MONITOR_WARNING
+    assert listed[0]["runtime_warning"] == chan_signals.MONITOR_WARNING
     assert "runtime_warning" not in monitor_rules.load_one(env.path, legacy["id"])
     disabled = env.client.post("/api/monitor-rules", json=_rule(enabled=False))
     assert disabled.status_code == 200
     assert env.monitor.rule_count == 0
     enabled = env.client.post("/api/monitor-rules", json=_rule(enabled=True))
     assert enabled.status_code == 400
-    assert enabled.json()["detail"] == czsc_signals.MONITOR_WARNING
+    assert enabled.json()["detail"] == chan_signals.MONITOR_WARNING
     assert monitor_rules.load_one(env.path, legacy["id"])["enabled"] is False
     assert env.client.get("/api/monitor-rules").json()["rules"][0]["runtime_warning"]
 
@@ -132,12 +132,12 @@ def test_legacy_rule_warning_rejects_enable_but_allows_disabling(env):
     assert "runtime_warning" not in env.client.get("/api/monitor-rules").json()["rules"][0]
 
 
-@pytest.mark.parametrize("signal", czsc_signals.SIGNALS)
+@pytest.mark.parametrize("signal", chan_signals.SIGNALS)
 def test_plain_rule_cannot_use_czsc_conditions(env, signal):
     rule = _rule(type="signal", strategy_id=None, conditions=[{"field": signal, "op": "truth"}])
     response = env.client.post("/api/monitor-rules", json=rule)
     assert response.status_code == 400
-    assert response.json()["detail"] == czsc_signals.MONITOR_WARNING
+    assert response.json()["detail"] == chan_signals.MONITOR_WARNING
     assert monitor_rules.load_all(env.path) == []
 
 
@@ -145,7 +145,7 @@ def test_monitor_options_exclude_czsc(env):
     response = env.client.get("/api/monitor-rules/options")
     assert response.status_code == 200
     signals = {item["key"] for item in response.json()["builtin_signals"]}
-    assert not signals.intersection(czsc_signals.SIGNALS)
+    assert not signals.intersection(chan_signals.SIGNALS)
     assert "signal_ma20_breakout" in signals
 
 
@@ -163,7 +163,7 @@ def test_override_change_skips_runtime_clears_only_affected_state_and_rebaseline
     ordinary_states = {k: v for k, v in monitor._strategy_signal_state.items() if k[0] == ordinary["id"]}
     ordinary_seen = {k: v for k, v in monitor._strategy_signal_seen.items() if k[0] == ordinary["id"]}
     published = monitor.latest_strategy_results()
-    config.save_override(env.path, "demo", {"entry_signals": ["signal_czsc_first_buy"]})
+    config.save_override(env.path, "demo", {"entry_signals": ["signal_chan_bi_1_buy"]})
     env.engine.run.reset_mock()
     current = _quotes()
     if snapshot == "empty":
@@ -192,7 +192,7 @@ def test_override_change_skips_runtime_clears_only_affected_state_and_rebaseline
 @pytest.mark.parametrize("backend", ["polars_expr", "matrix_native"])
 def test_required_czsc_skips_before_history_matrix_or_strategy_run(env, backend):
     env.strategy.execution_backend = backend
-    env.strategy.required_features = frozenset({"signal_czsc_second_buy"})
+    env.strategy.required_features = frozenset({"signal_chan_bi_2_buy"})
     env.monitor.set_rules([_rule()])
 
     assert env.monitor.evaluate(_quotes()) == []
@@ -206,8 +206,8 @@ def test_required_czsc_skips_before_history_matrix_or_strategy_run(env, backend)
 @pytest.mark.parametrize("cleared_defaults", [False, True])
 def test_no_effective_czsc_preserves_save_list_and_runtime(env, cleared_defaults):
     if cleared_defaults:
-        env.strategy.entry_signals = ["signal_czsc_first_buy"]
-        env.strategy.exit_signals = ["signal_czsc_first_sell"]
+        env.strategy.entry_signals = ["signal_chan_bi_1_buy"]
+        env.strategy.exit_signals = ["signal_chan_bi_1_sell"]
         config.save_override(env.path, "demo", {"entry_signals": [], "exit_signals": []})
     response = env.client.post("/api/monitor-rules", json=_rule())
     assert response.status_code == 200
@@ -260,7 +260,7 @@ def test_multiple_rules_for_blocked_strategy_keep_cache_invalidation_update(env)
     monitor.set_rules([_rule(), _rule(id="second_rule")])
     assert monitor.evaluate(_quotes()) == []
     monitor.consume_strategy_result_updates()
-    config.save_override(env.path, "demo", {"exit_signals": ["signal_czsc_first_sell"]})
+    config.save_override(env.path, "demo", {"exit_signals": ["signal_chan_bi_1_sell"]})
     env.engine.run.reset_mock()
 
     assert monitor.evaluate(_quotes()) == []

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
-from app.indicators import czsc_signals as cs
+from app.indicators import chan_signals as cs
 from app.market_time import CN_TZ
 
 
@@ -20,36 +20,50 @@ def bars(n=12):
 
 def fake_runtime(monkeypatch, values):
     captured = []
-
-    class Analysis:
-        def __init__(self, initial, **kwargs):
-            self.last = initial[-1]
-            captured.extend(initial)
-
-        def update(self, bar):
-            self.last = bar
-            captured.append(bar)
-
-    runtime = SimpleNamespace(
-        CZSC=Analysis, RawBar=lambda **kw: SimpleNamespace(**kw),
-        Freq=SimpleNamespace(D="日线"),
-        call_signal=lambda name, analysis, params: [SimpleNamespace(v1=values[analysis.last.id])],
-    )
-    monkeypatch.setattr(cs, "_load_runtime", lambda: runtime)
-    monkeypatch.setattr(cs, "_ready", lambda analysis, spec: True)
+    class Replay:
+        def __init__(self, *args, **kwargs):
+            self.previous = None
+            self.ready = True
+            self.baseline = False
+        def update(self, row):
+            captured.append(SimpleNamespace(vol=row["volume"] * 100, amount=row["amount"]))
+            hit = values[(row["date"] - date(2024, 1, 1)).days] == "一买"
+            self.baseline = self.previous is None
+            fire = hit and self.previous is False
+            self.previous = hit
+            return [{"is_buy": True, "types": ["1"]}] if fire else []
+    monkeypatch.setattr(cs, "ChanReplay", Replay)
     return captured
 
 
 def test_edges_are_per_signal_and_initial_true_only_establishes_baseline(monkeypatch):
     fake_runtime(monkeypatch, ["一买", "一买", "其他", "一买", "一买", "其他", "一买"])
-    sig = "signal_czsc_first_buy"
+    sig = "signal_chan_bi_1_buy"
     result = cs.compute(bars(7), {sig})
     assert result[sig].to_list() == [None, False, False, True, False, False, True]
 
 
+def test_distinct_confirmed_points_on_adjacent_bars_both_fire(monkeypatch):
+    class Replay:
+        ready = True
+        baseline = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def update(self, row):
+            return [{"is_buy": True, "types": ["1", "2"]}]
+
+    monkeypatch.setattr(cs, "ChanReplay", Replay)
+    signals = {"signal_chan_bi_1_buy", "signal_chan_bi_2_buy"}
+    result = cs.compute(bars(2), signals)
+    for signal in signals:
+        assert result[signal].to_list() == [True, True]
+
+
 def test_units_order_and_isolation_between_symbols(monkeypatch):
     captured = fake_runtime(monkeypatch, ["其他", "一买", "一买"])
-    sig = "signal_czsc_first_buy"
+    sig = "signal_chan_bi_1_buy"
     frame = pl.concat([bars(3), bars(3).with_columns(pl.lit("600001.SH").alias("symbol"))]).reverse()
     result = cs.compute(frame, {sig})
     assert result.select("symbol", "date").equals(frame.select("symbol", "date"))
@@ -60,7 +74,7 @@ def test_units_order_and_isolation_between_symbols(monkeypatch):
 
 def test_missing_bar_breaks_the_baseline_instead_of_fabricating_an_edge(monkeypatch):
     fake_runtime(monkeypatch, ["其他", "一买", "一买", "一买"])
-    sig = "signal_czsc_first_buy"
+    sig = "signal_chan_bi_1_buy"
     frame = bars(4).with_columns(
         pl.when(pl.col("date") == date(2024, 1, 2)).then(None).otherwise(pl.col("close")).alias("close")
     )
@@ -71,7 +85,7 @@ def test_missing_bar_breaks_the_baseline_instead_of_fabricating_an_edge(monkeypa
 
 def test_unclosed_daily_bar_never_fires_and_timezone_is_explicit(monkeypatch):
     fake_runtime(monkeypatch, ["其他", "一买"])
-    sig = "signal_czsc_first_buy"
+    sig = "signal_chan_bi_1_buy"
     result = cs.compute(bars(2), {sig}, now=datetime(2024, 1, 2, 14, 59, tzinfo=CN_TZ))
     assert result[sig].to_list() == [None, None]
     assert cs.coverage(result, {sig})["signals"][0]["reasons"]["unclosed_bar"] == 1
@@ -80,7 +94,7 @@ def test_unclosed_daily_bar_never_fires_and_timezone_is_explicit(monkeypatch):
 def test_duplicate_daily_bars_are_rejected(monkeypatch):
     fake_runtime(monkeypatch, ["其他"])
     with pytest.raises(ValueError, match="重复"):
-        cs.compute(pl.concat([bars(1), bars(1)]), {"signal_czsc_first_buy"})
+        cs.compute(pl.concat([bars(1), bars(1)]), {"signal_chan_bi_1_buy"})
 
 
 def test_no_selected_signals_never_loads_optional_dependency(monkeypatch):
@@ -94,77 +108,41 @@ def test_selected_signals_fail_clearly_without_optional_dependency(monkeypatch):
         raise ValueError("CZSC 信号组件未安装")
     monkeypatch.setattr(cs, "_load_runtime", unavailable)
     with pytest.raises(ValueError, match="CZSC"):
-        cs.compute(bars(), {"signal_czsc_first_buy"})
+        cs.compute(bars(), {"signal_chan_bi_1_buy"})
 
 
-@pytest.mark.parametrize("failure", ["missing", "version", "binary"])
-def test_dependency_failures_disable_only_czsc(monkeypatch, failure):
-    def installed_version(name):
-        if failure == "missing":
-            raise cs.PackageNotFoundError(name)
-        return "0.0.0" if failure == "version" else cs.VERSION
-
-    def import_native(name):
-        raise RuntimeError("native module cannot initialize")
-
-    monkeypatch.setattr(cs, "version", installed_version)
-    monkeypatch.setattr(cs.importlib, "import_module", import_native)
-    status = cs.availability()
-    assert status["available"] is False
-    assert status["reason"]
+def test_dependency_failures_disable_only_chan(monkeypatch):
+    def broken():
+        raise ImportError("missing vendored module")
+    monkeypatch.setattr(cs, "_load_runtime", broken)
+    assert cs.availability()["available"] is False
     frame = bars()
     assert cs.compute(frame, set()).equals(frame)
-    with pytest.raises(ValueError, match="CZSC"):
-        cs.compute(frame, {"signal_czsc_first_buy"})
+    with pytest.raises(ImportError):
+        cs.compute(frame, {"signal_chan_bi_1_buy"})
 
 
 @pytest.fixture(scope="module")
 def native_history():
-    pytest.importorskip("czsc")
-    import numpy as np
-    rng = np.random.default_rng(2019)
-    n = 900
-    prices = 20 * np.exp(np.cumsum(rng.normal(0, .025, n)))
-    return pl.DataFrame({
-        "symbol": ["600000.SH"] * n,
-        "date": [date(2018, 1, 1) + timedelta(days=i) for i in range(n)],
-        "open": prices, "close": prices, "high": prices * 1.015, "low": prices * .985,
-        "volume": rng.uniform(1000, 3000, n), "amount": prices * 200000,
-    })
+    from tests.chan_fixtures import synthetic_bars
+    return pl.DataFrame([{**{k: v for k, v in row.items() if k != "dt"},
+                          "date": row["dt"].date(), "symbol": "600000.SH",
+                          "amount": row["volume"] * row["close"] * 100}
+                         for row in synthetic_bars(5, 3000)])
 
 
-def test_all_six_native_results_and_future_prefix_invariance(native_history):
-    import czsc
-    from czsc._native.signals import call_signal
-
+def test_all_native_families_and_future_prefix_invariance(native_history):
     wanted = set(cs.SIGNALS)
     result = cs.compute(native_history, wanted)
     prefix = cs.compute(native_history.head(600), wanted)
     assert result.head(600).equals(prefix)
-    # Both historical directions and all three algorithm families are exercised.
-    assert all(result[name].sum() > 0 for name in wanted)
-    analysis = None
-    previous = dict.fromkeys(wanted)
-    for i, row in enumerate(native_history.iter_rows(named=True)):
-        raw = czsc.RawBar(
-            symbol=row["symbol"], id=i, dt=datetime.combine(row["date"], datetime.min.time().replace(hour=15)),
-            freq=czsc.Freq.D, open=row["open"], high=row["high"], low=row["low"],
-            close=row["close"], vol=row["volume"] * 100, amount=row["amount"],
-        )
-        if analysis is None:
-            analysis = czsc.CZSC([raw], max_bi_num=50, min_bi_len=6)
-        else:
-            analysis.update(raw)
-        for name, spec in cs.SIGNALS.items():
-            raw_hit = call_signal(spec.function, analysis, spec.params)[0].v1 == spec.value
-            if result[name][i] is not None:
-                assert result[name][i] == (raw_hit and previous[name] is False)
-            previous[name] = raw_hit
+    for kind in ("1", "1p", "2", "2s", "3a", "3b"):
+        assert sum(result[name].sum() or 0 for name in wanted if cs.SIGNALS[name][0] == kind) > 0
+    assert cs.coverage(result, wanted)["profile_id"] == cs.PROFILE_ID
 
 
 def test_structure_shortage_is_reported_separately_from_no_signal():
-    pytest.importorskip("czsc")
-    sig = "signal_czsc_third_buy"
+    sig = "signal_chan_bi_3a_buy"
     result = cs.compute(bars(), {sig})
     assert result[sig].null_count() == len(result)
     assert cs.coverage(result, {sig})["signals"][0]["reasons"] == {"insufficient_structure": len(result)}
@@ -181,7 +159,7 @@ def test_options_reports_missing_optional_dependency_without_breaking_api(monkey
     from app.api.signals import get_options
     monkeypatch.setattr(cs, "availability", lambda: {"available": False, "reason": "组件未安装", "version": None})
     options = get_options()
-    assert options["czsc"]["available"] is False
+    assert options["chan"]["available"] is False
     assert options["fields"]
 
 
@@ -189,8 +167,8 @@ def strategy(**kwargs):
     from app.strategy.engine import StrategyDef
     defaults = dict(
         meta={"id": "czsc_test", "name": "CZSC测试", "scoring": {}, "params": [], "limit": 100, "asset_types": ["stock", "etf"]},
-        basic_filter={"enabled": False}, entry_signals=["signal_czsc_first_buy"],
-        exit_signals=["signal_czsc_first_sell"], stop_loss=None, trailing_stop=None,
+        basic_filter={"enabled": False}, entry_signals=["signal_chan_bi_1_buy"],
+        exit_signals=["signal_chan_bi_1_sell"], stop_loss=None, trailing_stop=None,
         trailing_take_profit_activate=None, trailing_take_profit_drawdown=None,
         max_hold_days=None, filter_fn=None, filter_history_fn=None, lookback_days=1, source="custom",
     )
@@ -218,7 +196,7 @@ def test_resolver_requests_raw_inputs_and_structural_history_only_when_selected(
     from app.backtest.strategy import StrategyDependencyResolver
     monkeypatch.setattr(cs, "_load_runtime", lambda: None)
     resolver = StrategyDependencyResolver()
-    plan = resolver.resolve(strategy(), params={}, basic_filter={}, entry_signals=["signal_czsc_first_buy"], exit_signals=[])
+    plan = resolver.resolve(strategy(), params={}, basic_filter={}, entry_signals=["signal_chan_bi_1_buy"], exit_signals=[])
     assert plan.base_columns >= cs.INPUT_COLUMNS
     assert plan.warmup_bars >= cs.WARMUP_BARS
     # A dynamic Python filter's legacy full-feature fallback must remain optional-dependency-free.
@@ -233,12 +211,12 @@ def test_strategy_run_uses_history_and_ignores_future_rows(native_history):
     spec = strategy()
     engine._strategies["czsc_test"] = spec
     computed = cs.compute(native_history.head(600), set(spec.entry_signals + spec.exit_signals))
-    target = computed.filter(pl.col("signal_czsc_first_buy").fill_null(False))["date"][-1]
+    target = computed.filter(pl.col("signal_chan_bi_1_buy").fill_null(False))["date"][-1]
     result = engine.run("czsc_test", StrategyDataContext(
         asset_type="stock", timeframe="1d", as_of=target,
         current=native_history.filter(pl.col("date") == target), history=native_history,
     ))
-    assert result.entry_signal_hits == [{"symbol": "600000.SH", "signals": ["signal_czsc_first_buy"]}]
+    assert result.entry_signal_hits == [{"symbol": "600000.SH", "signals": ["signal_chan_bi_1_buy"]}]
     assert result.czsc_coverage["signals"][0]["ready_rows"] == 1
     assert engine.required_history_bars(["czsc_test"]) >= cs.WARMUP_BARS
 
@@ -261,7 +239,7 @@ def test_empty_selection_keeps_coverage_for_only_the_requested_pool(monkeypatch)
     assert report["unavailable_rows"] == 0
 
 
-@pytest.mark.parametrize("example", [None, "first", "second", "third"])
+@pytest.mark.parametrize("example", [None, "first", "second", "third", "lesson038"])
 def test_backtest_native_signal_confirmed_before_fill(native_history, monkeypatch, tmp_path, example):
     from pathlib import Path
 
@@ -282,15 +260,19 @@ def test_backtest_native_signal_confirmed_before_fill(native_history, monkeypatc
     strategies = StrategyEngine([tmp_path / "strategies" / "custom"])
     sid = "czsc_test"
     if example:
-        sid = f"custom_czsc_{example}_bs"
-        path = Path(__file__).resolve().parents[2] / "docs" / "examples" / "czsc-strategies" / f"{sid}.py"
+        sid = "custom_chan_lesson038" if example == "lesson038" else f"custom_chan_{example}_bs"
+        path = Path(__file__).resolve().parents[2] / "docs" / "examples" / "chan-strategies" / f"{sid}.py"
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(repo=repo, strategy_engine=strategies)))
         saved = _save_strategy_code(StrategyCodeSaveRequest(
             strategy_id=sid, code=path.read_text(), target_source="custom", mode="create",
         ), request)
         assert saved["ok"] is True
         assert sid in {meta["id"] for meta in strategies.list_strategies()}
-        assert strategies.get(sid).entry_signals == [f"signal_czsc_{example}_buy"]
+        expected_entries = (
+            ["signal_chan_bi_1_buy", "signal_chan_bi_2_buy"]
+            if example == "lesson038" else (["signal_chan_bi_3a_buy", "signal_chan_bi_3b_buy"] if example == "third" else [f"signal_chan_bi_{1 if example == 'first' else 2}_buy"])
+        )
+        assert strategies.get(sid).entry_signals == expected_entries
     else:
         strategies._strategies[sid] = strategy()
     service = StrategyBacktestService(engine, strategies)
@@ -320,7 +302,7 @@ def test_czsc_config_changes_invalidate_only_affected_strategy(tmp_path, method)
     engine = StrategyEngine([])
     spec = strategy(entry_signals=[], exit_signals=[])
     engine._strategies["czsc_test"] = spec
-    prior = {"entry_signals": ["signal_czsc_first_buy"]} if method.startswith("reset") else {}
+    prior = {"entry_signals": ["signal_chan_bi_1_buy"]} if method.startswith("reset") else {}
     if method == "reset_unknown":
         prior = {"entry_signals": ["signal_czsc_retired"]}
     strategy_config.save_override(tmp_path, "czsc_test", prior)
@@ -337,7 +319,7 @@ def test_czsc_config_changes_invalidate_only_affected_strategy(tmp_path, method)
         reset_config("czsc_test", request)
     else:
         handler = save_config if method == "save" else patch_config
-        handler(SaveConfigRequest(strategy_id="czsc_test", overrides={"entry_signals": ["signal_czsc_first_buy"]}), request)
+        handler(SaveConfigRequest(strategy_id="czsc_test", overrides={"entry_signals": ["signal_chan_bi_1_buy"]}), request)
     cached = strategy_cache.read_cache(tmp_path)
     assert set(cached["results"]) == {"unrelated"}
     assert "czsc_test" not in cached["today_ever_rows"]
@@ -355,7 +337,7 @@ def test_sse_error_preserves_czsc_coverage(monkeypatch, as_object):
     from app.api import backtest
     from app.backtest.strategy import StrategyBacktestResult
 
-    report = {"version": cs.VERSION, "signals": [{"signal_id": "signal_czsc_first_buy", "ready_rows": 0}]}
+    report = {"version": cs.VERSION, "signals": [{"signal_id": "signal_chan_bi_1_buy", "ready_rows": 0}]}
     result = {"error": "没有买入信号", "stats": {"czsc_coverage": report}}
     if as_object:
         result = StrategyBacktestResult(run_id="test", config={}, **result)

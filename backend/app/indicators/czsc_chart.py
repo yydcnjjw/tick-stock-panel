@@ -1,59 +1,60 @@
-"""CZSC 收盘结构快照与识别日事件; 复用信号回放,不承担取数。"""
+"""chan.py chart output; module path retained for existing chart integrations."""
 from __future__ import annotations
 
 from datetime import datetime
 
 import polars as pl
 
-from app.indicators import czsc_signals as cs
+from app.indicators import chan_signals as cs
+from app.indicators.chan_runtime import label_time
 from app.indicators.czsc_bars import closed_bars
 from app.market_time import cn_now
 
 
-def _label(dt, timeframe: str) -> str:
-    return dt.isoformat(timespec="minutes") if timeframe.endswith("m") else dt.date().isoformat()
+def structure_snapshot(state, timeframe="1d"):
+    from app.vendor.chanpy.Common.CEnum import FX_TYPE
+
+    def at(unit):
+        return label_time(state.rows[unit.idx]["date"], timeframe)
+
+    def line(item):
+        return {"start": at(item.get_begin_klu()), "end": at(item.get_end_klu()),
+                "start_price": item.get_begin_val(), "end_price": item.get_end_val(),
+                "confirmed": bool(item.is_sure), "dashed": not item.is_sure}
+
+    def centers(items):
+        return [{"start": at(z.begin), "end": at(z.end), "low": z.low, "high": z.high,
+                 "bi_count": z.end_bi.idx - z.begin_bi.idx + 1, "confirmed": bool(z.is_sure)}
+                for z in items if not z.is_one_bi_zs() and z.low <= z.high]
+
+    fractals = []
+    for candle in state.level.lst:
+        if candle.fx not in (FX_TYPE.TOP, FX_TYPE.BOTTOM):
+            continue
+        top = candle.fx == FX_TYPE.TOP
+        unit = candle.get_peak_klu(top)
+        fractals.append({"date": at(unit), "price": unit.high if top else unit.low,
+                         "kind": "top" if top else "bottom"})
+    return {"strokes": [line(b) for b in state.level.bi_list if b.is_sure],
+            "unfinished": [line(b) for b in state.level.bi_list if not b.is_sure],
+            "segments": [line(s) for s in state.level.seg_list],
+            "centers": centers(state.level.zs_list), "segment_centers": centers(state.level.segzs_list),
+            "fractals": fractals, "bsp_points": state.points_snapshot()}
 
 
-def _stroke(bi, timeframe: str) -> dict:
-    return {
-        "start": _label(bi.fx_a.dt, timeframe), "end": _label(bi.fx_b.dt, timeframe),
-        "start_price": bi.fx_a.fx, "end_price": bi.fx_b.fx,
-    }
-
-
-def structure_snapshot(analysis, timeframe: str = "1d") -> dict:
-    finished = analysis.finished_bis
-    strokes = [_stroke(bi, timeframe) for bi in finished]
-    centers = [
-        {"start": _label(z.sdt, timeframe), "end": _label(z.edt, timeframe), "low": z.zd, "high": z.zg,
-         "bi_count": len(z.bis)}
-        for z in analysis.zs_list if len(z.bis) >= 3 and z.is_valid()
-    ]
-    fractals = [
-        {"date": _label(fx.dt, timeframe), "price": fx.fx, "kind": "top" if str(fx.mark) == "顶分型" else "bottom"}
-        for fx in analysis.fx_list
-    ]
-    # bi_list 的末笔也可能尚未确认; 不能把它漏画或画成已完成笔。
-    unfinished = [_stroke(bi, timeframe) for bi in analysis.bi_list[len(finished):]]
-    ubi = analysis.ubi
-    if ubi and ubi.get("fx_a"):
-        start = ubi["fx_a"]
-        upward = str(ubi["direction"]) == "向上"
-        end = ubi["high_bar"] if upward else ubi["low_bar"]
-        if end.dt > start.dt:
-            unfinished.append({"start": _label(start.dt, timeframe), "end": _label(end.dt, timeframe),
-                               "start_price": start.fx, "end_price": end.high if upward else end.low})
-    return {"strokes": strokes, "centers": centers, "fractals": fractals, "unfinished": unfinished}
-
-
-def build_chart(df: pl.DataFrame, *, now: datetime | None = None, timeframe: str = "1d") -> dict:
+def build_chart(df: pl.DataFrame, *, now: datetime | None = None, timeframe="1d"):
     cutoff = now or cn_now()
     df = closed_bars(df, timeframe, cutoff)
-    shapes = {key: [] for key in ("strokes", "centers", "fractals", "unfinished")}
+    shapes = {key: [] for key in ("strokes", "centers", "fractals", "unfinished", "segments", "segment_centers", "bsp_points")}
+    events = []
 
-    def collect(analysis):
-        for key, values in structure_snapshot(analysis, timeframe).items():
+    def collect(state):
+        for key, values in structure_snapshot(state, timeframe).items():
             shapes[key].extend(values)
+        for event in state.events:
+            for kind in event["types"]:
+                events.append({**event, "event_id": event["event_id"] + ":" + kind,
+                               "signal_id": f"signal_chan_{event['level']}_{kind}_{'buy' if event['is_buy'] else 'sell'}"})
 
     result = cs._replay(df, set(cs.SIGNALS), now=cutoff, on_segment=collect, timeframe=timeframe)
     invalid_expr = (pl.col(cs.reason_column(next(iter(cs.SIGNALS)))) == "missing_data").fill_null(False)
@@ -66,14 +67,10 @@ def build_chart(df: pl.DataFrame, *, now: datetime | None = None, timeframe: str
     if not valid.is_empty():
         valid = valid.with_columns(pl.col("_segment").cast(pl.String).alias("symbol"))
         valid = compute_indicators(valid, needed={"macd_dif", "macd_dea", "macd_hist"}).sort("date")
-    rows, signals = [], []
+    rows = []
     for row in valid.iter_rows(named=True):
         day = row["date"].isoformat(timespec="minutes") if timeframe.endswith("m") else row["date"].isoformat()
-        close = row["close"]
         rows.append({"date": day, **{k: row[k] for k in ("open", "high", "low", "close", "volume", "amount")},
                      **{k: row[k] for k in ("macd_dif", "macd_dea", "macd_hist")}})
-        for name in cs.SIGNALS:
-            if row[name] is True:
-                signals.append({"date": day, "signal_id": name, "price": close})
-    return {"rows": rows, **shapes, "signals": signals, "invalid_dates": invalid_dates,
+    return {"rows": rows, **shapes, "signals": events, "invalid_dates": invalid_dates,
             "coverage": cs.coverage(result, set(cs.SIGNALS))}
