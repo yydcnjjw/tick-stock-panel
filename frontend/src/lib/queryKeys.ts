@@ -80,8 +80,8 @@ export const QK = {
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
 
   // Kline
-  czscChart:            (symbol: string, timeframe: CzscTimeframe) => ['czsc', symbol, timeframe, '1.0.1', 1000, 6, 50] as const,
-  czscDaily:            (symbol: string) => ['czsc-daily', symbol, '1d', '1.0.1', 1000, 6, 50] as const,
+  czscChart:            (symbol: string, timeframe: CzscTimeframe, provider?: string, assetType?: 'stock' | 'index') => ['czsc', symbol, timeframe, 'chan-v1-429d6ed-div1', 1000, ...(provider ? [provider] : []), assetType ?? 'auto'] as const,
+  czscDaily:            (symbol: string) => ['czsc-daily', symbol, '1d', 'chan-v1-429d6ed-div1', 1000] as const,
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
   klineLatest:          (symbol: string) => ['kline-latest', symbol] as const,

@@ -1502,32 +1502,52 @@ class KlineRepository:
 
     def get_daily_published(
         self, symbol: str, end: date, limit: int, columns: list[str],
+        *, asset_type: str = "stock",
     ) -> pl.DataFrame:
-        """读取已发布的股票 enriched 尾部, 不覆盖盘中缓存, 不过滤坏行。
+        """读取股票或指数落盘 enriched 尾部, 不覆盖盘中缓存, 不过滤坏行。
 
-        行数以实际记录计; 调用方通过发布 generation 校验读取一致性。
+        行数以实际记录计; 调用方通过发布 generation 或指数分区指纹校验读取一致性。
         读失败直接抛出, 避免把损坏数据伪装成无数据。
         """
-        root = self.store.data_dir / "kline_daily_enriched"
+        if asset_type not in {"stock", "index"}:
+            raise ValueError("图表日线快照仅支持股票和指数")
+        root = self.store.data_dir / ("kline_index_enriched" if asset_type == "index" else "kline_daily_enriched")
         if not any(root.glob("**/*.parquet")):
             return pl.DataFrame()
         lf = scan_enriched_parquet(
-            self._enriched_glob, cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            str(root / "**" / "*.parquet"), cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
         ).filter((pl.col("symbol") == symbol) & (pl.col("date") <= end))
         return guarded_collect(lf.select(columns).sort("date").tail(limit))
 
-    def get_minute_chart_generation(self) -> str:
-        """分钟图表只读版本: 复用分区修改指纹, 不初始化或写入版本文件。"""
-        root = self.store.data_dir / "kline_minute"
+    def get_index_chart_generation(self) -> str:
+        """旧指数历史无发布标记; 只读指纹用于检测读中变化及缓存失效。"""
+        return self._chart_partition_generation(self.store.data_dir / "kline_index_enriched")
+
+    def _chart_partition_generation(self, root: Path) -> str:
         parts = [(str(path.relative_to(root)), self._partition_fingerprint(path))
                  for path in sorted(root.glob("**/*.parquet"))]
         return hashlib.sha256(repr(parts).encode()).hexdigest()
 
-    def get_minute_published(self, symbol: str, end: datetime, limit: int) -> pl.DataFrame:
+    def minute_chart_root(self, provider: str | None = None) -> Path:
+        """显式来源只读写 CZSC 隔离目录, 不进入普通分钟的递归扫描。"""
+        if provider is None:
+            return self.store.data_dir / "kline_minute"
+        if not provider or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in provider):
+            raise ValueError("分钟数据源名称不符合要求")
+        return self.store.data_dir / "kline_czsc_minute" / provider
+
+    def get_minute_chart_generation(self, *, provider: str | None = None) -> str:
+        """分钟图表只读版本: 复用分区修改指纹, 不初始化或写入版本文件。"""
+        return self._chart_partition_generation(self.minute_chart_root(provider))
+
+    def get_minute_published(
+        self, symbol: str, end: datetime, limit: int, *, provider: str | None = None,
+    ) -> pl.DataFrame:
         """股票图表的有界分钟快照; 保留坏行且让读取错误上抛, 不混入实时内存。"""
-        if not any((self.store.data_dir / "kline_minute").glob("**/*.parquet")):
+        root = self.minute_chart_root(provider)
+        if not any(root.glob("**/*.parquet")):
             return pl.DataFrame()
-        lf = pl.scan_parquet(self._minute_glob).select(
+        lf = pl.scan_parquet(str(root / "**" / "*.parquet")).select(
             "symbol", "datetime", "open", "high", "low", "close", "volume", "amount",
         ).filter((pl.col("symbol") == symbol) & (pl.col("datetime") <= end))
         return guarded_collect(lf.sort("datetime").tail(limit), engine="streaming")

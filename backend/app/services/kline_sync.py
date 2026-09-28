@@ -877,6 +877,7 @@ def _try_custom_minute(
     freq: str = "1m",
     on_chunk_done: Callable[[int, int, str], None] | None = None,
     raise_on_error: bool = False,
+    provider_name: str | None = None,
 ) -> tuple[pl.DataFrame | None, bool]:
     """尝试从自定义分钟源拉取。返回 (df, should_fallback_to_tickflow)。
 
@@ -896,9 +897,12 @@ def _try_custom_minute(
     实现内部以 2 参 (cur, total) 调用。这里包装一层, provider 调 2 参时补
     默认 seg_label="custom" 转发给上层, 保证进度展示不降级。
     """
-    provider_name = preferences.get_minute_data_provider()
+    explicit_provider = provider_name is not None
+    provider_name = provider_name if explicit_provider else preferences.get_minute_data_provider()
     provider, fallback, err = _resolve_minute_provider(provider_name)
     if fallback:
+        if explicit_provider and provider_name != "tickflow":
+            raise MinuteSyncError(f"分钟数据源 {provider_name} 不可用,请检查数据源配置")
         if err is not None:
             if raise_on_error:
                 raise MinuteSyncError(f"分钟数据源 {provider_name} 不可用,请检查数据源配置")
@@ -949,6 +953,8 @@ def sync_minute_batch(
     segment_trading_days: int = 20,
     on_segment: Callable[[pl.DataFrame], None] | None = None,
     asset_type: AssetType = "stock",
+    *,
+    provider_name: str | None = None,
 ) -> pl.DataFrame:
     """批量拉取多股分钟 K。
 
@@ -970,6 +976,7 @@ def sync_minute_batch(
         symbols, start_time=start_time, end_time=end_time,
         asset_type=asset_type, freq="1m", on_chunk_done=on_chunk_done,
         raise_on_error=on_segment is not None,
+        **({"provider_name": provider_name} if provider_name is not None else {}),
     )
     if not fallback:
         # 自定义源成功: 遵守与 TickFlow 路径一致的 on_segment 契约。

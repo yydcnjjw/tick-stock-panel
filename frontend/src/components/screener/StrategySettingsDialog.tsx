@@ -9,7 +9,7 @@ import { SignalPicker } from './SignalPicker'
 import { SignalTriggerActions } from '@/components/signals/SignalTriggerActions'
 import { Modal } from '@/components/Modal'
 import { ScoringEditor } from '@/components/ScoringEditor'
-import { CZSC_MONITOR_UNSUPPORTED, czscStrategyUnsupportedReason, isCzscSignal } from '@/lib/signals'
+import { CHAN_MONITOR_UNSUPPORTED, chanStrategyUnsupportedReason, isStructureSignal } from '@/lib/signals'
 
 // 内置列名 → 中文标签
 const FIELD_LABEL: Record<string, string> = {}
@@ -401,8 +401,8 @@ export function StrategySettingsDialog({ strategyId, assetType = 'stock', onClos
               <div className="flex items-center justify-center py-16"><div className="w-6 h-6 border-2 border-accent/30 border-t-accent rounded-full animate-spin" /></div>
             ) : detail ? (
               <>
-                {czscStrategyUnsupportedReason(detail.execution_backend) && (
-                  <p className="text-[11px] text-warning">{czscStrategyUnsupportedReason(detail.execution_backend)}</p>
+                {chanStrategyUnsupportedReason(detail.execution_backend) && (
+                  <p className="text-[11px] text-warning">{chanStrategyUnsupportedReason(detail.execution_backend)}</p>
                 )}
                 {/* 名称 + 描述 + 显示上限 */}
                 <div className="flex items-end gap-4">
@@ -631,8 +631,8 @@ export function StrategySettingsDialog({ strategyId, assetType = 'stock', onClos
 
                     <div className="rounded-xl border border-amber-400/20 bg-amber-400/[0.04] px-3 py-2 text-[10px] leading-4 text-muted">
                       出入场触发器保存后用于<b className="text-secondary">回测</b>；支持盘中计算的触发器也用于监控。选股扫描仍按策略本身的筛选规则。
-                      {[...entrySignals, ...exitSignals, ...(detail.required_features ?? [])].some(isCzscSignal) && (
-                        <p className="mt-1 text-warning">{CZSC_MONITOR_UNSUPPORTED}。回测中引用 CZSC 的一侧须使用次交易日开盘成交。</p>
+                      {[...entrySignals, ...exitSignals, ...(detail.required_features ?? [])].some(isStructureSignal) && (
+                        <p className="mt-1 text-warning">{CHAN_MONITOR_UNSUPPORTED}。回测中引用 chan.py 的一侧须使用次交易日开盘成交。</p>
                       )}
                     </div>
 

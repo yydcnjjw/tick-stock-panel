@@ -43,8 +43,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 日线结构辅助信号；按需加载，固定算法版本以保持历史结果可复现。
-czsc = ["czsc==1.0.1"]
+# 历史安装命令的空兼容 extra；chan.py 核心随 app/vendor/chanpy 打包。
+czsc = []
 
 # Legacy CPU runtime: install the Polars compatibility kernel on
 # machines without AVX2/FMA support.
@@ -81,6 +81,7 @@ build-backend = "hatchling.build"
 packages = ["app"]
 
 [tool.ruff]
+extend-exclude = ["app/vendor/chanpy"]
 line-length = 100
 target-version = "py311"
 

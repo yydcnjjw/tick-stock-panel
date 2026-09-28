@@ -408,7 +408,7 @@ class BacktestEngine:
         czsc_max_workers: int = 1,
     ) -> pl.DataFrame:
         """按解析后的依赖加载窄基础列并计算回测所需特征。"""
-        from app.indicators.czsc_signals import CzscReplayCancelledError
+        from app.indicators.chan_signals import ChanReplayCancelledError
         from app.indicators.pipeline import (
             compute_indicators,
             compute_limit_signals,
@@ -416,7 +416,7 @@ class BacktestEngine:
         )
 
         if cancel_event is not None and cancel_event.is_set():
-            raise CzscReplayCancelledError("回测已取消")
+            raise ChanReplayCancelledError("回测已取消")
         df = self.load_panel(
             symbols,
             start,
@@ -425,7 +425,7 @@ class BacktestEngine:
             asset_type=asset_type,
         )
         if cancel_event is not None and cancel_event.is_set():
-            raise CzscReplayCancelledError("回测已取消")
+            raise ChanReplayCancelledError("回测已取消")
         if df.is_empty():
             return df
 

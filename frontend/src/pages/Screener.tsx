@@ -5,7 +5,7 @@ import { ScanSearch, Clock, TrendingUp, Star, Filter, Layers, Network, Sparkles,
 import { api, ApiError, genRuleId, type ScreenerStrategy, type ScreenerResult } from '@/lib/api'
 import { fetchMinuteBatchIncremental } from '@/lib/minuteBatchIncremental'
 import { DEFAULT_STRATEGY_NOTIFY_EVENTS } from '@/lib/strategyMonitorEvents'
-import { cnSignal, CZSC_COVERAGE_REASON_LABELS } from '@/lib/signals'
+import { cnSignal, STRUCTURE_COVERAGE_REASON_LABELS } from '@/lib/signals'
 import { toast } from '@/components/Toast'
 import { useDataStatus, usePreferences, useCapabilities, useQuoteStatus } from '@/lib/useSharedQueries'
 import { useWatchlistBatchAdd } from '@/lib/useSharedMutations'
@@ -239,7 +239,7 @@ export function Screener() {
 
   // runAll/盘后缓存只覆盖日线策略; 池中分钟策略由手动单跑实时计算
   const dailyPoolIds = useMemo(
-    () => visiblePool.filter(id => !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false)),
+    () => visiblePool.filter(id => strategyMap.get(id)?.execution_available !== false && !(strategyMap.get(id)?.timeframes?.includes('1m') ?? false)),
     [visiblePool, strategyMap],
   )
 
@@ -564,6 +564,10 @@ export function Screener() {
     setActiveStrategy(s.id)
     setShowAll(false)
     if (result?.strategy !== s.id || result.as_of !== asOf) setResult(null)
+    if (s.execution_available === false) {
+      toast(s.execution_unavailable_reason ?? "旧策略已停用", "error")
+      return
+    }
     const tf = s.timeframes?.includes('1m') ? '1m' as const : '1d' as const
     // ETF 模式无股票盘后缓存、分钟策略走本地分钟分区 → 始终实时单跑。
     // 传空日期让后端用自身的最新交易日 (ETF 与分钟分区跟股票 enriched 可能不同日)。
@@ -877,13 +881,16 @@ export function Screener() {
             </div>
           )}
 
+          {!showAll && activeStrategy && strategies.data?.presets.find(s => s.id === activeStrategy)?.execution_available === false && (
+            <p role="status" className="mb-3 text-xs text-warning">{strategies.data.presets.find(s => s.id === activeStrategy)?.execution_unavailable_reason}。当前显示内容仅供历史查看。</p>
+          )}
           {!showAll && result?.czsc_coverage && (
             <div className="mb-3 rounded-btn border border-border bg-surface px-3 py-2 text-[11px] leading-5 text-secondary">
-              <p>CZSC 可计算性 · {result.czsc_coverage.version} · 不可计算不等于未命中；首次可计算只建基线。</p>
+              <p>{result.czsc_coverage.engine ?? 'CZSC'} 可计算性 · {result.czsc_coverage.version} · 不可计算不等于未命中；首次可计算只建基线。</p>
               {result.czsc_coverage.signals.map(signal => (
                 <p key={signal.signal_id}>
                   {cnSignal(signal.signal_id)}：可计算 {signal.ready_rows} 行，不可计算 {signal.unavailable_rows} 行，涉及 {signal.unavailable_symbols} 只标的
-                  {Object.entries(signal.reasons).map(([reason, count]) => `；${CZSC_COVERAGE_REASON_LABELS[reason] ?? `其他原因（${reason}）`} ${count}`).join('')}
+                  {Object.entries(signal.reasons).map(([reason, count]) => `；${STRUCTURE_COVERAGE_REASON_LABELS[reason] ?? `其他原因（${reason}）`} ${count}`).join('')}
                 </p>
               ))}
             </div>

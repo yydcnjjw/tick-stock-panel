@@ -124,7 +124,7 @@ def search_instruments(
     request: Request,
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
-    asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf"),
+    asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf,index"),
 ):
     """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。
 
@@ -360,19 +360,20 @@ def get_czsc_chart(
     request: Request,
     symbol: str = Query(..., pattern=r"^[0-9]{6}\.(SH|SZ|BJ)$"),
     timeframe: Literal["1m", "5m", "30m", "1d", "1w"] = "1d",
+    asset_type: Literal["stock", "index"] | None = None,
 ):
     from app.enriched_generation import EnrichedGenerationUnavailableError
     from app.services.czsc_chart import get_chart
 
     try:
-        return get_chart(request.app.state.repo, symbol, timeframe=timeframe)
+        return get_chart(request.app.state.repo, symbol, timeframe=timeframe, asset_type=asset_type)
     except EnrichedGenerationUnavailableError as exc:
         raise HTTPException(status_code=503, detail="行情数据正在更新或版本不可用, 请稍后刷新") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.exception("CZSC chart read failed for %s", symbol)
-        raise HTTPException(status_code=503, detail="CZSC 图表读取失败, 请稍后刷新") from exc
+        logger.exception("chan.py chart read failed for %s", symbol)
+        raise HTTPException(status_code=503, detail="chan.py 图表读取失败, 请稍后刷新") from exc
 
 
 @router.get("/czsc-daily")
@@ -1284,6 +1285,9 @@ async def sync_minute_single(request: Request, body: dict):
     symbol = body.get("symbol", "").strip()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol 不能为空")
+    purpose = body.get("purpose", "general")
+    if not isinstance(purpose, str) or purpose not in {"general", "czsc"}:
+        raise HTTPException(status_code=400, detail="不支持的分钟同步用途")
 
     requested_days = body.get("days")
     if requested_days is not None:
@@ -1300,13 +1304,25 @@ async def sync_minute_single(request: Request, body: dict):
     if repo.resolve_asset_type(symbol) == "index":
         raise HTTPException(status_code=400, detail="指数分钟K不支持落库同步 (指数分钟数据走 /api/index/minute 实时读取)")
 
-    if not _minute_allowed(capset):
+    route = None
+    if purpose == "czsc":
+        from app.services import czsc_chart
+        if repo.resolve_asset_type(symbol) != "stock":
+            raise HTTPException(status_code=400, detail="chan.py 分钟图仅支持 A 股股票")
+        route = czsc_chart.minute_route()
+        if body.get("provider") is not None and body["provider"] != route["effective"]:
+            raise HTTPException(status_code=409, detail="chan.py 分钟数据源已变更,请刷新后重试")
+        if not route["usable"]:
+            raise HTTPException(status_code=403, detail="chan.py 分钟数据源不可用,请检查数据源配置")
+    elif not _minute_allowed(capset):
         raise HTTPException(status_code=403, detail="需要 Pro+ 权限")
 
     days = requested_days if requested_days is not None else get_minute_sync_days()
     loop = asyncio.get_event_loop()
 
     def _run():
+        if route is not None:
+            return czsc_chart.sync_minute(repo, symbol, provider=route["effective"], days=days)
         return kline_sync.sync_and_persist_minute([symbol], repo, capset, days=days, force_full_days=True)
 
     try:
@@ -1320,10 +1336,12 @@ async def sync_minute_single(request: Request, body: dict):
         )
 
     # 刷新视图
-    from app.jobs.daily_pipeline import _refresh_single_view
-    _refresh_single_view(repo, "kline_minute")
+    if route is None:
+        from app.jobs.daily_pipeline import _refresh_single_view
+        _refresh_single_view(repo, "kline_minute")
 
-    return {"status": "ok", "symbol": symbol, "rows": written}
+    return {"status": "ok", "symbol": symbol, "rows": written,
+            **({"provider": route["effective"]} if route is not None else {})}
 
 
 @router.post("/clear_minute")

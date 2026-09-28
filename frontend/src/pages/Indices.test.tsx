@@ -123,3 +123,13 @@ it('keeps selected dates isolated across delayed, out-of-order and cached respon
   expect(chart()?.textContent).toBe('2026-09-11|2026-09-11T09:35:00|12')
   expect(chart()?.dataset.mount).toBe(mount11)
 })
+
+
+it('links the selected index to its CZSC daily chart', async () => {
+  await act(async () => root.render(
+    <MemoryRouter initialEntries={['/indices?symbol=000300.SH']}><QueryClientProvider client={client}><Indices /></QueryClientProvider></MemoryRouter>,
+  ))
+  await settle()
+  const link = [...host.querySelectorAll('a')].find(a => a.textContent?.includes('查看 chan.py'))
+  expect(link?.getAttribute('href')).toBe('/czsc?symbol=000300.SH&asset_type=index&timeframe=1d')
+})

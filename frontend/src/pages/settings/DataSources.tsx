@@ -150,6 +150,7 @@ const DEFAULT_ROUTING: Record<ProviderField, string> = {
   daily_data_provider: 'tickflow',
   adj_factor_provider: 'tickflow',
   minute_data_provider: 'tickflow',
+  czsc_minute_data_provider: 'exchange_minute',
   full_minute_data_provider: 'tickflow',
   depth5_data_provider: 'tickflow',
   realtime_data_provider: 'tickflow',

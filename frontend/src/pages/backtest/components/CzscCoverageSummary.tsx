@@ -1,11 +1,11 @@
 import type { CzscCoverage } from '@/lib/api'
-import { cnSignal, CZSC_COVERAGE_REASON_LABELS } from '@/lib/signals'
+import { cnSignal, STRUCTURE_COVERAGE_REASON_LABELS } from '@/lib/signals'
 
 export function CzscCoverageSummary({ coverage }: { coverage?: CzscCoverage }) {
   if (!coverage) return null
   return (
     <section className="min-w-0 rounded-card border border-border bg-surface p-3 space-y-2">
-      <h3 className="text-xs font-medium text-foreground">CZSC 可计算性摘要 · {coverage.version}</h3>
+      <h3 className="text-xs font-medium text-foreground">{coverage.engine ?? 'CZSC'} 可计算性摘要 · {coverage.version}</h3>
       <p className="text-[11px] leading-5 text-muted">行数按标的 × 交易日、逐信号统计。不可计算不等于未命中；首次可计算仅建立基线，不触发交易。</p>
       {coverage.signals.length === 0 ? (
         <p className="text-xs text-muted">本次未返回逐信号可计算性数据。</p>
@@ -30,7 +30,7 @@ export function CzscCoverageSummary({ coverage }: { coverage?: CzscCoverage }) {
                   <td className="py-2 pr-3 num">{signal.unavailable_symbols}</td>
                   <td className="py-2">
                     {Object.entries(signal.reasons).map(([reason, count]) => (
-                      <div key={reason}>{CZSC_COVERAGE_REASON_LABELS[reason] ?? `其他原因（${reason}）`}：{count}</div>
+                      <div key={reason}>{STRUCTURE_COVERAGE_REASON_LABELS[reason] ?? `其他原因（${reason}）`}：{count}</div>
                     ))}
                     {Object.keys(signal.reasons).length === 0 && '无'}
                   </td>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Activity, Loader2, Lock, RefreshCw } from 'lucide-react'
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
@@ -180,7 +180,11 @@ export function Indices() {
             指数使用独立 kline_index_* parquet，不进入股票选股和策略链路。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedSymbol && <Link
+            to={`/czsc?symbol=${encodeURIComponent(selectedSymbol)}&asset_type=index&timeframe=1d`}
+            className="text-xs text-accent hover:underline"
+          >查看 chan.py 结构图 →</Link>}
           <button
             onClick={() => syncDaily.mutate()}
             disabled={syncDaily.isPending}

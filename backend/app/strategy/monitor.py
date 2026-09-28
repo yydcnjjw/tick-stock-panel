@@ -21,7 +21,7 @@ from typing import Any, Callable
 
 import polars as pl
 
-from app.indicators import czsc_signals
+from app.indicators import chan_signals
 from app.market_time import cn_today
 from app.strategy import config as _strategy_config
 from app.strategy.custom_signals import _OP_BUILDERS  # type: ignore  # 复用运算符构造器
@@ -33,17 +33,19 @@ logger = logging.getLogger(__name__)
 
 
 def czsc_strategy_monitor_warning(strategy, overrides: dict | None = None) -> str | None:
-    """只检查生效依赖, 不加载 CZSC 原生组件或计算日线信号。"""
+    """只检查生效依赖, 不加载 chan.py 原生组件或计算日线信号。"""
     from app.strategy.engine import StrategyEngine
 
+    if reason := chan_signals.retirement_reason(strategy, overrides):
+        return reason
     names = list(getattr(strategy, "required_features", ()) or ())
     for key in ("entry_signals", "exit_signals"):
         names.extend(StrategyEngine._effective_signals(
             overrides or {}, key, getattr(strategy, key, []),
         ))
     try:
-        if czsc_signals.selected(names):
-            return czsc_signals.MONITOR_WARNING
+        if chan_signals.selected(names):
+            return chan_signals.MONITOR_WARNING
     except ValueError as exc:
         return str(exc)
     return None

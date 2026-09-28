@@ -61,6 +61,15 @@ CAPABILITY_REGISTRY: list[dict] = [
         "tf_tier": "pro",
     },
     {
+        "id": "czsc_minute",
+        "dataset": "minute",
+        "label": "chan.py 分钟",
+        "desc": "chan.py 分钟结构图独立数据源, 与普通分钟K隔离",
+        "field": "czsc_minute_data_provider",
+        "default": "exchange_minute",
+        "tf_tier": "pro",
+    },
+    {
         "id": "depth5",
         "label": "五档盘口",
         "desc": "连板梯队封单与盘口深度",
@@ -169,7 +178,7 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
         if tf_available:
             candidates.append(dict(_TICKFLOW_CANDIDATE))
         for s in sources:
-            if cap["id"] not in s["datasets"]:
+            if cap.get("dataset", cap["id"]) not in s["datasets"]:
                 continue
             entry = {
                 "name": s["name"],

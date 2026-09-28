@@ -167,6 +167,9 @@ def _strategy_detail(
     engine: StrategyEngine | None = None,
 ) -> dict:
     """策略详情（含用户覆盖）"""
+    from app.indicators.chan_signals import retirement_reason
+
+    execution_reason = retirement_reason(s, overrides)
     bf = {**s.basic_filter}
     scoring = effective_scoring(s.meta.get("scoring"), overrides)
     scoring_directions = effective_scoring_directions(overrides)
@@ -191,6 +194,8 @@ def _strategy_detail(
         "source": s.source,
         "research_only": s.meta.get("research_only", False),
         "execution_backend": s.execution_backend,
+        "execution_available": execution_reason is None,
+        "execution_unavailable_reason": execution_reason,
         "asset_types": s.meta.get("asset_types", ["stock"]),
         "timeframes": s.meta.get("timeframes", ["1d"]),
         "version": s.meta.get("version", "1.0.0"),
@@ -416,10 +421,14 @@ def run_all(req: RunAllRequest, request: Request):
         return {"as_of": None, "results": {}}
 
     all_overrides = strategy_config.list_overrides(data_dir)
+    from app.indicators.chan_signals import retirement_reason
+
     strategy_ids = [
         meta["id"]
         for meta in engine.list_strategies()
         if not meta.get("research_only")
+        and meta.get("execution_available", True)
+        and retirement_reason(engine.get(meta["id"]), all_overrides.get(meta["id"])) is None
         and req.asset_type in meta.get("asset_types", ["stock"])
         and req.timeframe in meta.get("timeframes", ["1d"])
     ]
@@ -492,7 +501,7 @@ def _invalidate_czsc_config(request: Request, strategy: StrategyDef, before: dic
     for override in (before, after):
         names.update(StrategyEngine._effective_signals(override, "entry_signals", strategy.entry_signals))
         names.update(StrategyEngine._effective_signals(override, "exit_signals", strategy.exit_signals))
-    if before == after or not any(n.startswith(("signal_czsc_", "czsc_")) for n in names):
+    if before == after or not any(n.startswith(("signal_czsc_", "czsc_", "signal_chan_", "chan_")) for n in names):
         return
     sid = strategy.meta["id"]
     strategy_cache.invalidate_strategy(_data_dir(request), sid)

@@ -4,7 +4,7 @@
 // Prod:同源(FastAPI 托管前端 dist)
 
 import { toast } from '@/components/Toast'
-import { CZSC_MONITOR_UNSUPPORTED, isCzscSignal } from './signals'
+import { CHAN_MONITOR_UNSUPPORTED, isStructureSignal } from './signals'
 
 const BASE = ''
 
@@ -99,22 +99,32 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
 }
 
 export type CzscTimeframe = '1m' | '5m' | '30m' | '1d' | '1w'
+export type CzscAssetType = 'stock' | 'index'
 
 export interface CzscChartLine {
-  start: string; end: string; start_price: number; end_price: number
+  start: string; end: string; start_price: number; end_price: number; confirmed?: boolean; dashed?: boolean
 }
 export interface CzscChartResponse {
   symbol: string
+  asset_type: CzscAssetType
+  supported_timeframes: CzscTimeframe[]
+  unavailable_reason?: 'unsupported_timeframe'
   name: string
   status: 'ready' | 'empty' | 'unavailable'
   reason: string | null
   version: string
   timeframe: CzscTimeframe
   source: string
+  minute_provider?: string
+  minute_provider_display?: string
+  minute_sync_available?: boolean
   price_basis: string
   analysis_bars: number
-  min_bi_len: number
-  max_bi_num: number
+  min_bi_len?: number
+  max_bi_num?: number
+  engine?: string
+  profile_id?: string
+  algorithm_config?: Record<string, unknown>
   input_start?: string
   input_end?: string
   source_count?: number
@@ -127,9 +137,12 @@ export interface CzscChartResponse {
     amount: number; macd_dif: number; macd_dea: number; macd_hist: number }[]
   strokes?: CzscChartLine[]
   unfinished?: CzscChartLine[]
+  segments?: CzscChartLine[]
+  segment_centers?: { start: string; end: string; low: number; high: number; confirmed?: boolean }[]
+  bsp_points?: { level: 'bi' | 'seg'; date: string; price: number; is_buy: boolean; types: string[]; status: 'candidate' | 'confirmed'; first_seen_at: string | null; confirmed_at: string | null }[]
   centers?: { start: string; end: string; low: number; high: number; bi_count: number }[]
   fractals?: { date: string; price: number; kind: 'top' | 'bottom' }[]
-  signals?: { date: string; signal_id: string; price: number }[]
+  signals?: { date: string; signal_id: string; price: number; event_id?: string; level?: string; endpoint_at?: string; first_seen_at?: string; confirmed_at?: string }[]
   invalid_dates?: string[]
   coverage?: CzscCoverage
 }
@@ -422,6 +435,8 @@ export interface IndexQuote {
 
 // ===== Screener =====
 export interface ScreenerStrategy {
+  execution_available?: boolean
+  execution_unavailable_reason?: string | null
   id: string
   name: string
   description: string
@@ -811,6 +826,8 @@ export interface CompositeChildInfo {
 }
 
 export interface StrategyDetail {
+  execution_available?: boolean
+  execution_unavailable_reason?: string | null
   id: string
   name: string
   description: string
@@ -917,6 +934,7 @@ export interface CustomSignalOptions {
   stringOperators?: string[]
   kinds: { key: string; label: string }[]
   /** 可选依赖状态；旧后端缺少此字段时前端禁用 CZSC 新选择。 */
+  chan?: { available: boolean; reason: string | null; version: string | null; profile_id?: string }
   czsc?: { available: boolean; reason: string | null; version: string | null }
 }
 
@@ -1608,6 +1626,8 @@ export interface StrategyBacktestTrade {
 }
 
 export interface CzscCoverage {
+  engine?: string
+  profile_id?: string
   version: string
   signals: {
     signal_id: string
@@ -1619,7 +1639,7 @@ export interface CzscCoverage {
 }
 
 export type BacktestProgress = {
-  phase: 'czsc_signals'
+  phase: 'czsc_signals' | 'chan_signals'
   completed: number
   total: number
 } | {
@@ -1767,6 +1787,7 @@ export type ProviderField =
   | 'daily_data_provider'
   | 'adj_factor_provider'
   | 'minute_data_provider'
+  | 'czsc_minute_data_provider'
   | 'full_minute_data_provider'
   | 'depth5_data_provider'
   | 'realtime_data_provider'
@@ -1887,6 +1908,7 @@ export interface Preferences {
   daily_data_provider?: string
   adj_factor_provider?: string
   minute_data_provider?: string
+  czsc_minute_data_provider?: string
   /** 全量分钟 (盘中全市场分钟落盘) 生效源; 默认 tickflow (需 Expert 档) */
   full_minute_data_provider?: string
   /** 分钟源 1 分钟历史深度(交易日); null/缺省 = 深历史 (如 tickflow)。分时档位据此收窄 */
@@ -2455,8 +2477,8 @@ export const api = {
     request<KlineDailyLatestResponse>(
       `/api/kline/daily/latest?symbol=${encodeURIComponent(symbol)}`,
     ),
-  czscChart: (symbol: string, timeframe: CzscTimeframe) => request<CzscChartResponse>(
-    `/api/kline/czsc?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`, { quiet: true },
+  czscChart: (symbol: string, timeframe: CzscTimeframe, assetType?: CzscAssetType) => request<CzscChartResponse>(
+    `/api/kline/czsc?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}${assetType ? `&asset_type=${assetType}` : ''}`, { quiet: true },
   ),
   czscDaily: (symbol: string) => request<CzscChartResponse>(
     `/api/kline/czsc-daily?symbol=${encodeURIComponent(symbol)}`, { quiet: true },
@@ -2550,6 +2572,11 @@ export const api = {
     request<{ status: string; symbol: string; rows: number }>('/api/kline/sync_minute_single', {
       method: 'POST',
       body: JSON.stringify({ symbol, ...(days != null ? { days } : {}) }),
+    }),
+  syncCzscMinute: (symbol: string, provider: string, days = 30) =>
+    request<{ status: string; symbol: string; rows: number; provider: string }>('/api/kline/sync_minute_single', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, provider, days, purpose: 'czsc' }),
     }),
   clearMinute: () =>
     request<{ status: string; removed: number }>('/api/kline/clear_minute', {
@@ -3623,14 +3650,14 @@ export const api = {
   monitorRuleSave: async (rule: MonitorRule) => {
     // 新建和重新启用都经过此入口；关闭旧规则不受依赖限制。
     if (rule.enabled) {
-      let hasCzsc = rule.conditions.some(condition => isCzscSignal(condition.field))
+      let hasCzsc = rule.conditions.some(condition => isStructureSignal(condition.field))
       if (!hasCzsc && rule.type === 'strategy' && rule.strategy_id) {
         const detail = await request<StrategyDetail>(`/api/strategies/${encodeURIComponent(rule.strategy_id)}`)
-        hasCzsc = [...detail.entry_signals, ...detail.exit_signals, ...(detail.required_features ?? [])].some(isCzscSignal)
+        hasCzsc = [...detail.entry_signals, ...detail.exit_signals, ...(detail.required_features ?? [])].some(isStructureSignal)
       }
       if (hasCzsc) {
-        toast(CZSC_MONITOR_UNSUPPORTED, 'error')
-        throw new ApiError(CZSC_MONITOR_UNSUPPORTED, 400)
+        toast(CHAN_MONITOR_UNSUPPORTED, 'error')
+        throw new ApiError(CHAN_MONITOR_UNSUPPORTED, 400)
       }
     }
     return request<{ ok: boolean; rule: MonitorRule }>('/api/monitor-rules', {

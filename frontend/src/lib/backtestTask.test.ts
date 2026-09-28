@@ -3,6 +3,11 @@ import type { BacktestProgress } from './api'
 import { describeBacktestProgress } from './backtestTask'
 
 describe('backtest progress display', () => {
+  it('identifies the new engine while keeping historical CZSC progress readable', () => {
+    expect(describeBacktestProgress({ phase: 'chan_signals', completed: 4, total: 8 })).toEqual({
+      label: '准备 chan.py 信号 · 4/8 只股票', percent: 50,
+    })
+  })
   it('shows stock preparation separately before switching to legacy simulation progress', () => {
     const messages: BacktestProgress[] = [
       { phase: 'czsc_signals', completed: 0, total: 200 },

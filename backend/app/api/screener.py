@@ -264,6 +264,8 @@ def strategies(
     engine = getattr(request.app.state, "strategy_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="策略引擎未初始化")
+    from app.indicators.chan_signals import retirement_reason
+
     presets = []
     for meta in engine.list_strategies():
         if meta.get("research_only"):
@@ -274,8 +276,11 @@ def strategies(
             continue
         sid = meta["id"]
         overrides = strategy_config.load_override(data_dir, sid)
+        reason = retirement_reason(engine.get(sid), overrides)
         presets.append({
             **meta,
+            "execution_available": reason is None,
+            "execution_unavailable_reason": reason,
             "name": overrides.get("name") or meta["name"],
             "description": overrides.get("description") or meta.get("description", ""),
         })
@@ -710,6 +715,7 @@ def run_all(request: Request, body: Optional[dict] = None):
             meta["id"]
             for meta in engine.list_strategies()
             if not meta.get("research_only")
+            and meta.get("execution_available", True)
             and asset_type in meta.get("asset_types", ["stock"])
             and timeframe in meta.get("timeframes", ["1d"])
         ]
@@ -721,6 +727,14 @@ def run_all(request: Request, body: Optional[dict] = None):
     t0 = time.perf_counter()
     all_overrides = strategy_config.list_overrides(data_dir)
     logger.info("run_all: list_overrides took %.1fms (%d overrides)", (time.perf_counter() - t0) * 1000, len(all_overrides))
+
+    from app.indicators.chan_signals import retirement_reason
+
+    retired = {sid: retirement_reason(engine.get(sid), all_overrides.get(sid)) for sid in all_ids}
+    retired = {sid: reason for sid, reason in retired.items() if reason}
+    if retired and requested_ids:
+        raise HTTPException(status_code=400, detail=retired)
+    all_ids = [sid for sid in all_ids if sid not in retired]
 
     params_map = {
         sid: dict((all_overrides.get(sid) or {}).get("params") or {})

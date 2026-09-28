@@ -19,14 +19,14 @@ export function describeBacktestProgress(progress: BacktestProgress | null | und
   percent: number
 } | null {
   if (!progress || !Number.isFinite(progress.total) || progress.total <= 0) return null
-  const preparing = progress.phase === 'czsc_signals'
+  const preparing = progress.phase === 'czsc_signals' || progress.phase === 'chan_signals'
   if (!preparing && progress.phase != null && progress.phase !== 'simulation') return null
-  const completed = preparing ? progress.completed : progress.day
+  const completed = 'completed' in progress ? progress.completed : progress.day
   if (!Number.isFinite(completed) || completed < 0) return null
   return {
     label: preparing
-      ? `准备 CZSC 信号 · ${completed}/${progress.total} 只股票`
-      : `回测中 · 第 ${completed}/${progress.total} 天 (${progress.date})`,
+      ? `准备 ${progress.phase === 'chan_signals' ? 'chan.py' : 'CZSC'} 信号 · ${completed}/${progress.total} 只股票`
+      : `回测中 · 第 ${completed}/${progress.total} 天 (${'date' in progress ? progress.date : ''})`,
     percent: Math.min(100, (completed * 100) / progress.total),
   }
 }

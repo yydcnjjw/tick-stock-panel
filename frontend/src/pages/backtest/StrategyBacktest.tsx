@@ -19,7 +19,7 @@ import { fmtPct, fmtPrice, priceColorClass } from '@/lib/format'
 import { boardTag } from '@/lib/board'
 import { boardTag as boardBadge } from '@/components/stock-table/primitives'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
-import { cnSignal, czscStrategyUnsupportedReason, isCzscSignal } from '@/lib/signals'
+import { cnSignal, chanStrategyUnsupportedReason, isStructureSignal } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { SignalPicker } from '@/components/screener/SignalPicker'
 import { describeBacktestProgress, startBacktest, stopBacktest, tryReconnect, useBacktestTask } from '@/lib/backtestTask'
@@ -1473,18 +1473,21 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   // 分钟策略: 入场在盘中触发分钟成交, 日线专属的成交口径选项不适用
   const isMinuteStrategy = detail?.execution_backend === 'minute_filter'
   const czscOptions = useCustomSignalOptions()
-  const hasCzscCodeDependency = (detail?.required_features ?? []).some(isCzscSignal)
-  const hasCzscEntry = effectiveEntrySignals.some(isCzscSignal) || hasCzscCodeDependency
-  const hasCzscExit = effectiveExitSignals.some(isCzscSignal)
+  const hasCzscCodeDependency = (detail?.required_features ?? []).some(isStructureSignal)
+  const hasCzscEntry = effectiveEntrySignals.some(isStructureSignal) || hasCzscCodeDependency
+  const hasCzscExit = effectiveExitSignals.some(isStructureSignal)
   const hasCzsc = hasCzscEntry || hasCzscExit
   const czscFillMismatch = (hasCzscEntry && entryFill !== 'open_t+1') || (hasCzscExit && exitFill !== 'open_t+1')
-  const czscRunErrors = hasCzsc ? [
-    assetType !== 'stock' ? 'CZSC 仅支持 A 股股票，不支持 ETF' : null,
-    czscStrategyUnsupportedReason(detail?.execution_backend),
-    czscOptions.czscUnavailableReason,
-    hasCzscEntry && entryFill !== 'open_t+1' ? 'CZSC 入场侧须使用次交易日开盘成交' : null,
-    hasCzscExit && exitFill !== 'open_t+1' ? 'CZSC 出场侧须使用次交易日开盘成交' : null,
-  ].filter((reason): reason is string => !!reason) : []
+  const czscRunErrors = [
+    detail?.execution_available === false ? detail.execution_unavailable_reason : null,
+    ...(hasCzsc ? [
+    assetType !== 'stock' ? 'chan.py 仅支持 A 股股票，不支持 ETF' : null,
+    chanStrategyUnsupportedReason(detail?.execution_backend),
+    czscOptions.chanUnavailableReason,
+    hasCzscEntry && entryFill !== 'open_t+1' ? 'chan.py 入场侧须使用次交易日开盘成交' : null,
+    hasCzscExit && exitFill !== 'open_t+1' ? 'chan.py 出场侧须使用次交易日开盘成交' : null,
+  ] : []),
+  ].filter((reason): reason is string => !!reason)
   const { data: minuteDataStatus } = useQuery({
     queryKey: QK.dataStatus,
     queryFn: api.dataStatus,
@@ -1956,17 +1959,17 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
           </div>
         )}
 
-        {hasCzsc && (
+        {(hasCzsc || detail?.execution_available === false) && (
           <div className={`rounded-btn border px-3 py-2 text-[11px] leading-5 ${czscRunErrors.length ? 'border-warning/30 bg-warning/10 text-warning' : 'border-border text-muted'}`} role="status">
-            <p>CZSC 使用已收盘日线，引用侧最早次交易日开盘成交。</p>
-            {hasCzscCodeDependency && <p>策略代码依赖 CZSC，移除界面触发器不会解除依赖；入场侧仍须次交易日开盘成交。</p>}
+            <p>chan.py 使用已收盘日线，引用侧最早次交易日开盘成交。</p>
+            {hasCzscCodeDependency && <p>策略代码依赖 chan.py，移除界面触发器不会解除依赖；入场侧仍须次交易日开盘成交。</p>}
             {czscRunErrors.map(reason => <p key={reason}>{reason}</p>)}
             {czscFillMismatch && (
               <button type="button" className="mt-1 underline" onClick={() => {
                 if (hasCzscEntry) setEntryFill('open_t+1')
                 if (hasCzscExit) setExitFill('open_t+1')
-                toast('CZSC 引用侧已设为次交易日开盘成交', 'success')
-              }}>将 CZSC 引用侧设为次日开盘</button>
+                toast('chan.py 引用侧已设为次交易日开盘成交', 'success')
+              }}>将 chan.py 引用侧设为次日开盘</button>
             )}
             {czscOptions.isError && <button type="button" onClick={() => czscOptions.refetch()} className="ml-2 underline">重新检查可用性</button>}
           </div>
@@ -2159,7 +2162,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
                   {backtestTask?.reconnecting
                     ? '正在尝试恢复连接，若持续失败可停止后重试'
                     : result ? '当前展示上次结果，完成后自动替换'
-                      : backtestTask?.progress?.phase === 'czsc_signals'
+                      : (backtestTask?.progress?.phase === 'czsc_signals' || backtestTask?.progress?.phase === 'chan_signals')
                         ? '正在按历史日线计算信号，完成后开始成交模拟'
                         : backtestProgress ? '正在模拟成交与资金变化' : '正在加载回测数据…'}
                 </div>

@@ -520,7 +520,7 @@ async def strategy_stream(
     - 结果保留 5 分钟供重连
 
     事件类型:
-      - progress: {phase: "czsc_signals", completed, total} 或 {day, total, date, equity}
+      - progress: {phase: "chan_signals", completed, total} 或 {day, total, date, equity}
       - done: {result} (完整回测结果)
       - error: {message}
     """

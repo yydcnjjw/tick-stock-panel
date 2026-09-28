@@ -204,6 +204,10 @@ ENRICHED_COLUMNS: dict[str, dict[str, str]] = {
     "float_shares":            "流通股本 (来自 instruments)",
 }
 
+from app.indicators.chan_signals import SIGNAL_LABELS as _CHAN_SIGNAL_LABELS
+
+ENRICHED_COLUMNS.update(_CHAN_SIGNAL_LABELS)
+
 # 仅供 AI/开发者快速索引: 按类别的列名列表
 ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
     "storage":  [k for k in ENRICHED_COLUMNS if k in ENRICHED_STORAGE_COLS],
@@ -612,12 +616,12 @@ INDICATOR_COLUMNS: frozenset[str] = frozenset(
 
 def get_signal_dependencies() -> dict[str, frozenset[str]]:
     """返回内置与 JSON 自定义信号的唯一依赖映射。"""
-    from app.indicators import czsc_signals
+    from app.indicators import chan_signals
     from app.strategy import custom_signals
 
     return {
         **SIGNAL_DEPENDENCIES,
-        **{name: czsc_signals.INPUT_COLUMNS for name in czsc_signals.SIGNALS},
+        **{name: chan_signals.INPUT_COLUMNS for name in chan_signals.SIGNALS},
         **custom_signals.expression_dependencies(_get_custom_signal_exprs()),
     }
 
@@ -688,11 +692,11 @@ def compute_signals(
     df = custom_signals.materialize_factor_columns(df, exprs, needed=needed)
     df = custom_signals.inject(df, exprs, needed=needed)
 
-    # 可选结构信号必须显式选择, 默认全量指标刷新不加载 CZSC。
+    # 可选结构信号必须显式选择, 默认全量指标刷新不加载 chan.py。
     if needed is not None:
-        from app.indicators import czsc_signals
+        from app.indicators import chan_signals
 
-        df = czsc_signals.compute(
+        df = chan_signals.compute(
             df, needed, progress_cb=progress_cb,
             cancel_event=cancel_event, max_workers=czsc_max_workers,
         )

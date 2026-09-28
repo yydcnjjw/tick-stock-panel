@@ -22,7 +22,7 @@ import numpy as np
 import polars as pl
 
 from app.config import settings
-from app.indicators import czsc_signals
+from app.indicators import chan_signals
 from app.strategy.scoring import (
     SCORING_DIRECTION_LOW,
     effective_scoring,
@@ -613,6 +613,8 @@ class StrategyEngine:
                 **s.meta,
                 "source": s.source,
                 "execution_backend": s.execution_backend,
+                "execution_available": chan_signals.retirement_reason(s) is None,
+                "execution_unavailable_reason": chan_signals.retirement_reason(s),
             })
         return result
 
@@ -724,12 +726,14 @@ class StrategyEngine:
         for strategy_id in strategy_ids:
             strategy = self.get(strategy_id)
             overrides = overrides_map.get(strategy_id) or {}
-            if czsc_signals.selected([
+            if chan_signals.retirement_reason(strategy, overrides):
+                continue
+            if chan_signals.selected([
                 *self._effective_signals(overrides, "entry_signals", strategy.entry_signals),
                 *self._effective_signals(overrides, "exit_signals", strategy.exit_signals),
                 *strategy.required_features,
             ]):
-                required = max(required, czsc_signals.WARMUP_BARS + 1)
+                required = max(required, chan_signals.WARMUP_BARS + 1)
             scoring = effective_scoring(strategy.meta.get("scoring"), overrides)
             required = max(required, scoring_warmup_bars(scoring))
             if strategy.execution_backend == "matrix_native":
@@ -902,18 +906,20 @@ class StrategyEngine:
         t0 = time.perf_counter()
 
         s = self.get(strategy_id)
+        if reason := chan_signals.retirement_reason(s, overrides):
+            raise ValueError(reason)
         self.validate_context(s, context)
         as_of = context.as_of
         overrides = overrides or {}
         params = self.resolve_params(s, params, overrides)
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
-        czsc_needed = czsc_signals.validate_usage(
+        czsc_needed = chan_signals.validate_usage(
             [*entry_signals, *exit_signals, *s.required_features],
             asset_type=context.asset_type, execution_backend=s.execution_backend,
         )
         if czsc_needed and context.timeframe != "1d":
-            raise ValueError("CZSC 辅助信号仅支持日线")
+            raise ValueError("chan.py 确认信号仅支持日线")
 
         if s.execution_backend == "matrix_native":
             return self._run_matrix_strategy(
@@ -948,13 +954,13 @@ class StrategyEngine:
         czsc_diagnostics = None
         if czsc_needed:
             if history is None or history.is_empty():
-                raise ValueError("CZSC 辅助信号缺少日线历史, 请先同步历史数据")
+                raise ValueError("chan.py 确认信号缺少日线历史, 请先同步历史数据")
             source = history.filter(pl.col("date") <= as_of)
             if pool:
                 source = source.filter(pl.col("symbol").is_in(pool))
-            history = czsc_signals.compute(source, czsc_needed)
+            history = chan_signals.compute(source, czsc_needed)
             today_signals = history.filter(pl.col("date") == as_of)
-            signal_columns = sorted(czsc_needed) + [czsc_signals.reason_column(n) for n in sorted(czsc_needed)]
+            signal_columns = sorted(czsc_needed) + [chan_signals.reason_column(n) for n in sorted(czsc_needed)]
             if current is not None:
                 if pool:
                     current = current.filter(pl.col("symbol").is_in(pool))
@@ -962,13 +968,13 @@ class StrategyEngine:
                     today_signals.select("symbol", "date", *signal_columns),
                     on=["symbol", "date"], how="left",
                 ).with_columns([
-                    pl.col(czsc_signals.reason_column(n)).fill_null(
+                    pl.col(chan_signals.reason_column(n)).fill_null(
                         pl.when(pl.col(n).is_null()).then(pl.lit("missing_data"))
                     ) for n in czsc_needed
                 ])
-                czsc_diagnostics = czsc_signals.coverage(current.filter(pl.col("date") == as_of), czsc_needed)
+                czsc_diagnostics = chan_signals.coverage(current.filter(pl.col("date") == as_of), czsc_needed)
             else:
-                czsc_diagnostics = czsc_signals.coverage(today_signals, czsc_needed)
+                czsc_diagnostics = chan_signals.coverage(today_signals, czsc_needed)
 
         signal_df = current if current is not None else history
         if signal_df is None:
@@ -1177,7 +1183,9 @@ class StrategyEngine:
         df = context.current
         params_map = params_map or {}
         overrides_map = overrides_map or {}
-        selected_ids = list(self._strategies) if strategy_ids is None else strategy_ids
+        selected_ids = ([sid for sid, spec in self._strategies.items()
+                         if not chan_signals.retirement_reason(spec, overrides_map.get(sid))]
+                        if strategy_ids is None else strategy_ids)
         selected = [(sid, self.get(sid)) for sid in selected_ids]
         for _, strategy in selected:
             self.validate_context(strategy, context)

@@ -16,10 +16,10 @@ def bar_close_time(value: date | datetime, timeframe: str) -> datetime:
     """返回北京时间墙钟闭合边界; 周线保守等到周五,不猜测节假日。"""
     if timeframe.endswith("m"):
         if not isinstance(value, datetime) or value.tzinfo is not None:
-            raise ValueError("CZSC 分钟时间必须为北京时间墙钟 datetime")
+            raise ValueError("chan.py 分钟时间必须为北京时间墙钟 datetime")
         return value
     if not isinstance(value, date) or isinstance(value, datetime):
-        raise ValueError("CZSC 日/周线 date 必须为交易日期")
+        raise ValueError("chan.py 日/周线 date 必须为交易日期")
     if timeframe == "1w":
         value += timedelta(days=4 - value.weekday())
     return datetime.combine(value, time(15))
@@ -27,18 +27,18 @@ def bar_close_time(value: date | datetime, timeframe: str) -> datetime:
 
 def closed_bars(df: pl.DataFrame, timeframe: str, now: datetime) -> pl.DataFrame:
     if timeframe not in FREQUENCIES:
-        raise ValueError("不支持的 CZSC 图表周期")
+        raise ValueError("不支持的 chan.py 图表周期")
     if df.is_empty():
         return df
     stamp = now.replace(tzinfo=CN_TZ) if now.tzinfo is None else now.astimezone(CN_TZ)
     if timeframe.endswith("m"):
         dtype = df.schema["date"]
         if not isinstance(dtype, pl.Datetime) or dtype.time_zone is not None:
-            raise ValueError("CZSC 分钟时间必须为北京时间墙钟 datetime")
+            raise ValueError("chan.py 分钟时间必须为北京时间墙钟 datetime")
         end = pl.col("date")
     else:
         if df.schema["date"] != pl.Date:
-            raise ValueError("CZSC 日/周线 date 必须为交易日期")
+            raise ValueError("chan.py 日/周线 date 必须为交易日期")
         day = pl.col("date")
         if timeframe == "1w":
             day = day.dt.truncate("1w") + pl.duration(days=4)
@@ -70,18 +70,18 @@ def prepare_bars(df: pl.DataFrame, timeframe: str, *, now: datetime) -> pl.DataF
     只聚合 09:31..11:30 和 13:01..15:00, 午休不跨桶。
     """
     if timeframe not in FREQUENCIES:
-        raise ValueError("不支持的 CZSC 图表周期")
+        raise ValueError("不支持的 chan.py 图表周期")
     if df.is_empty():
         return df
     minute = timeframe.endswith("m")
     column = "datetime" if minute else "date"
     missing = {"symbol", column, *VALUE_COLUMNS} - set(df.columns)
     if missing:
-        raise ValueError(f"CZSC 行情缺少字段: {sorted(missing)}")
+        raise ValueError(f"chan.py 行情缺少字段: {sorted(missing)}")
     if df[column].null_count():
-        raise ValueError("CZSC 行情存在空时间")
+        raise ValueError("chan.py 行情存在空时间")
     if df.select(pl.struct("symbol", column).is_duplicated().any()).item():
-        raise ValueError("CZSC 行情存在重复的标的和时间")
+        raise ValueError("chan.py 行情存在重复的标的和时间")
     if timeframe == "1d":
         return closed_bars(df, timeframe, now)
     df = df.sort(["symbol", column]).with_columns(_valid_values(minute=minute).alias("_valid"))

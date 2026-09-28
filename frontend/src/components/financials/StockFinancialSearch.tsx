@@ -7,9 +7,10 @@ import { QK } from '@/lib/queryKeys'
 import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
-  onSelect: (symbol: string, name: string) => void
+  onSelect: (symbol: string, name: string, assetType?: string) => void
   /** 搜索资产类型, 逗号分隔 (默认 'stock')。如 'stock,index' */
   assetTypes?: string
+  placeholder?: string
 }
 
 /**
@@ -17,7 +18,7 @@ interface Props {
  * 复用 instrumentSearch 后端(代码 / 名称模糊匹配),单选即跳转该股财务详情。
  * 模式对齐 Watchlist.StockSearchBox:useQuery + 外部点击关闭 + 键盘导航。
  */
-export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
+export function StockFinancialSearch({ onSelect, assetTypes, placeholder }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(-1)
@@ -44,8 +45,8 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  function handleSelect(r: { symbol: string; name: string }) {
-    onSelect(r.symbol, r.name)
+  function handleSelect(r: { symbol: string; name: string; asset_type?: string }) {
+    onSelect(r.symbol, r.name, r.asset_type)
     setQuery('')
     setOpen(false)
     setActiveIdx(-1)
@@ -76,7 +77,7 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
         <input
           ref={inputRef}
           type="text"
-          placeholder="输入股票代码或名称，如 600000 / 浦发"
+          placeholder={placeholder ?? '输入股票代码或名称，如 600000 / 浦发'}
           value={query}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); setActiveIdx(-1) }}
           onFocus={() => { if (trimmed) setOpen(true) }}
@@ -105,7 +106,7 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
               </div>
             ) : results.length === 0 ? (
               <div className="px-4 py-6 text-center text-xs text-muted">
-                未找到匹配的股票
+                未找到匹配的{assetTypes?.includes('index') ? '标的' : '股票'}
               </div>
             ) : (
               results.map((r, i) => (
@@ -120,7 +121,7 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
                   <span className="font-mono shrink-0 text-xs w-[88px]">{r.symbol}</span>
                   <span className="truncate text-sm flex-1">{r.name}</span>
                   {(() => {
-                    const b = boardTag(r.symbol)
+                    const b = r.asset_type === 'index' ? null : boardTag(r.symbol)
                     return b && (
                       <span className={`shrink-0 px-1 py-0.5 rounded text-[10px] leading-none border ${b.color}`}>{b.label}</span>
                     )
