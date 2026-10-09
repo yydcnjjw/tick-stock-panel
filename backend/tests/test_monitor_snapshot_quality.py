@@ -86,10 +86,14 @@ def test_live_volume_ratio_and_signals_match_incremental_and_fallback(
     monkeypatch, tmp_path, hour, minute, expected,
 ):
     monkeypatch.setattr(quote_service, "cn_today", lambda: NOW.date())
-    # Both built-in and user signals must see the adjusted ratio.
-    exprs = {"csg_volume_test": (pl.col("vol_ratio_5d") >= 2).alias("csg_volume_test")}
+    # Both migrated and user signal definitions must see the adjusted ratio.
+    exprs = {
+        name: (pl.col("vol_ratio_5d") >= 2).alias(name)
+        for name in ("signal_volume_surge", "csg_volume_test")
+    }
     monkeypatch.setattr(pipeline, "_custom_signal_exprs", exprs)
     monkeypatch.setattr(pipeline, "_custom_signal_exprs_today", exprs)
+    monkeypatch.setattr(pipeline, "_custom_prev_fields_cache", set())
     monkeypatch.setattr(pipeline, "attach_deviation_columns_today", lambda df, *_: df)
     timestamp = int(NOW.replace(hour=hour, minute=minute).timestamp() * 1000)
     rows = [{

@@ -9,11 +9,25 @@ import { cnSignal, STRUCTURE_COVERAGE_REASON_LABELS, CHAN_BSP_LABELS } from '@/l
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { EChartsCandlestick } from '@/components/EChartsCandlestick'
 import type { ChartStructures } from '@/components/chartStructures'
+import { MA_PERIODS, type MovingAverageOptions } from '@/components/chartMovingAverages'
+import { storage } from '@/lib/storage'
 
 const LAYERS = { fractals: '分型', strokes: '已完成笔', centers: '笔中枢', segments: '线段', segmentCenters: '线段中枢', candidates: '买卖点端点（含候选）', unfinished: '未完成结构', signals: '确认事件' }
 const PERIODS: Record<CzscTimeframe, string> = { '1m': '1分', '5m': '5分', '30m': '30分', '1d': '日线', '1w': '周线' }
 const INDICATORS = ['vol', 'macd']
 const VOLUME_COMPARE = { enabled: false, days: 1 }
+const DEFAULT_MA: MovingAverageOptions = { type: 'SMA', periods: MA_PERIODS, showCrosses: true }
+
+function loadMovingAverages(): MovingAverageOptions {
+  const saved = storage.chanMovingAverages.get(null)
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return DEFAULT_MA
+  const value = saved as Partial<MovingAverageOptions>
+  return {
+    type: value.type === 'EMA' ? 'EMA' : 'SMA',
+    periods: Array.isArray(value.periods) ? MA_PERIODS.filter(n => value.periods!.includes(n)) : MA_PERIODS,
+    showCrosses: typeof value.showCrosses === 'boolean' ? value.showCrosses : true,
+  }
+}
 
 export default function CzscPage() {
   const queryClient = useQueryClient()
@@ -31,6 +45,11 @@ export default function CzscPage() {
   const route = matrix.data?.capabilities.find(cap => cap.id === 'czsc_minute')
   const provider = minute && assetType !== 'index' ? route?.effective : undefined
   const [layers, setLayers] = useState<Record<keyof typeof LAYERS, boolean>>({ fractals: true, strokes: true, centers: true, segments: true, segmentCenters: true, candidates: true, unfinished: true, signals: true })
+  const [movingAverages, setMovingAverages] = useState(loadMovingAverages)
+  const updateMovingAverages = (next: MovingAverageOptions) => {
+    setMovingAverages(next)
+    storage.chanMovingAverages.set(next)
+  }
   const [selection, setSelection] = useState<{ symbol: string; timeframe: CzscTimeframe; date: string } | null>(null)
   const query = useQuery({ queryKey: QK.czscChart(symbol, timeframe, provider, assetType), queryFn: async () => {
     const result = await api.czscChart(symbol, timeframe, assetType)
@@ -139,9 +158,35 @@ export default function CzscPage() {
                 </label>
               ))}
             </div>
+            <div role="group" aria-label="均线设置" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border p-3">
+              <span className="text-xs text-muted">均线</span>
+              <div className="flex gap-1">
+                {(['SMA', 'EMA'] as const).map(type => (
+                  <button key={type} type="button" aria-pressed={movingAverages.type === type}
+                    title={type === 'SMA' ? '简单移动平均线' : '指数移动平均线'}
+                    onClick={() => updateMovingAverages({ ...movingAverages, type })}
+                    className={`rounded-btn border px-2 py-1 text-xs ${movingAverages.type === type ? 'border-accent bg-accent/10 text-accent' : 'border-border text-secondary hover:bg-elevated'}`}>
+                    {type}
+                  </button>
+                ))}
+              </div>
+              {MA_PERIODS.map(period => (
+                <label key={period} className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
+                  <input type="checkbox" checked={movingAverages.periods.includes(period)}
+                    onChange={() => updateMovingAverages({ ...movingAverages,
+                      periods: MA_PERIODS.filter(n => n === period ? !movingAverages.periods.includes(n) : movingAverages.periods.includes(n)) })} />
+                  {movingAverages.type}{period}
+                </label>
+              ))}
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
+                <input type="checkbox" checked={movingAverages.showCrosses}
+                  onChange={() => updateMovingAverages({ ...movingAverages, showCrosses: !movingAverages.showCrosses })} />5↔10 交叉
+              </label>
+              <span className="text-[11px] text-muted">满 N 根显示 · 5、10 均显示时标注交叉</span>
+            </div>
             <div className="p-1 sm:p-3">
               {!!data.rows?.length && <EChartsCandlestick key={`${symbol}-${timeframe}`} data={data.rows} structures={structures}
-                stockInfo={{ name: data.name }} height={650} visibleBars={250} showMA={false}
+                stockInfo={{ name: data.name }} height={650} visibleBars={250} movingAverages={movingAverages}
                 activeIndicators={INDICATORS} volumeCompare={VOLUME_COMPARE}
                 onDateClick={day => setSelection({ symbol, timeframe, date: day })} />}
               {!data.rows?.length && <p role="status" className="p-8 text-center text-muted">当前数据缺少有效价格，暂无可绘制的 K 线。</p>}
@@ -149,6 +194,7 @@ export default function CzscPage() {
             <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-3 py-2 text-[11px] text-muted">
               <span className="text-blue-500">蓝线：笔 · 青线：线段</span><span className="text-amber-500">虚线：未完成结构，可能变化</span>
               <span className="text-violet-500">紫色区域：笔中枢 · 青色区域：线段中枢</span><span>拖动 / 滚轮缩放 · 点击 K 线查看信号</span>
+              <span>均线箭头：金色金叉 · 青色死叉 · 悬停查看数值，仅辅助观察</span>
             </div>
           </div>
           <p className="text-xs leading-6 text-muted">

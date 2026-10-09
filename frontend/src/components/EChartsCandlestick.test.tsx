@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { EChartsCandlestick, type OHLC } from './EChartsCandlestick'
+import type { MovingAverageOptions } from './chartMovingAverages'
 
 const chart = vi.hoisted(() => ({
   handlers: {} as Record<string, (event?: any) => void>,
@@ -18,7 +19,7 @@ const chart = vi.hoisted(() => ({
   convertFromPixel: () => [0, 0],
 }))
 
-vi.mock('echarts', () => ({ init: () => chart }))
+vi.mock('echarts', async importOriginal => ({ ...await importOriginal<typeof import('echarts')>(), init: () => chart }))
 
 // 超过 COMPACT_THRESHOLD(60): 切标的后 dataZoom 一响就会走紧凑态转换, 进而重写 markPoint
 const DAYS = Array.from({ length: 62 }, (_, i) =>
@@ -112,4 +113,53 @@ it('切股后鼠标未离开图表, 竖虚线重新命中即恢复「至今/周�
   // 移出图表区 → 重新收起
   await act(async () => { surface.dispatchEvent(new MouseEvent('mouseleave')) })
   expect(host.textContent).not.toContain('至今')
+})
+
+it('switches precise SMA/EMA lines, values and crossing markers while preserving ordinary chart defaults', async () => {
+  const data = rows(10).map((row, i) => ({ ...row,
+    ma5: i < 30 ? 9 : 11, ma10: 10, ma20: 10, ma60: 10,
+    ema5: i < 30 ? 11 : 9, ema10: 10, ema20: 10, ema60: 10,
+  }))
+  const render = async (movingAverages?: MovingAverageOptions, showMA = true) => {
+    await act(async () => root.render(<EChartsCandlestick data={data} movingAverages={movingAverages} showMA={showMA} visibleBars="all" />))
+  }
+  const series = () => chart.setOption.mock.calls.findLast(([option]) => option.series?.some((s: any) => s.name === 'K'))![0].series
+  await render()
+  expect(series().find((s: any) => s.name === 'MA5').smooth).toBe(true)
+  expect(series().some((s: any) => s.id === 'ma-crosses')).toBe(false)
+  expect(host.textContent).toContain('MA5:11.00')
+  const options: MovingAverageOptions = { type: 'SMA', periods: [5, 10, 20, 60], showCrosses: true }
+  await render(options)
+  expect(series().find((s: any) => s.name === 'SMA5')).toMatchObject({ smooth: false, connectNulls: false })
+  let crosses = series().find((s: any) => s.id === 'ma-crosses')
+  expect(crosses.data).toHaveLength(1)
+  expect(crosses.data[0]).toMatchObject({ date: DAYS[30], value: [30, 9], symbol: 'arrow' })
+  expect(crosses.tooltip.formatter({ data: crosses.data[0] })).toContain('SMA 5↔10 金叉')
+  const values = crosses.data
+  await act(async () => chart.handlers.dataZoom?.())
+  expect(series().find((s: any) => s.id === 'ma-crosses').data).toBe(values)
+  await render({ ...options, type: 'EMA' })
+  expect(series().some((s: any) => s.name === 'SMA5')).toBe(false)
+  expect(host.textContent).toContain('EMA5:9.00')
+  crosses = series().find((s: any) => s.id === 'ma-crosses')
+  expect(crosses.tooltip.formatter({ data: crosses.data[0] })).toContain('EMA 5↔10 死叉')
+  for (const periods of [[10, 20, 60], [5, 20, 60], []] as const) {
+    await render({ ...options, periods })
+    expect(series().some((s: any) => s.id === 'ma-crosses')).toBe(false)
+    expect(series().filter((s: any) => /^SMA/.test(s.name))).toHaveLength(periods.length)
+  }
+  await render({ ...options, showCrosses: false })
+  expect(series().some((s: any) => s.id === 'ma-crosses')).toBe(false)
+  expect(series().filter((s: any) => /^SMA/.test(s.name))).toHaveLength(4)
+  await render(options, false)
+  expect(series().filter((s: any) => /^SMA/.test(s.name) || s.id === 'ma-crosses')).toHaveLength(0)
+})
+
+it('shows warmup as unavailable and never joins MA lines through a null gap', async () => {
+  const data = rows(10).slice(0, 3).map((row, i) => ({ ...row, ma5: i === 1 ? null : 10 }))
+  await act(async () => root.render(<EChartsCandlestick data={data} movingAverages={{ type: 'SMA', periods: [5, 10], showCrosses: true }} />))
+  const option = chart.setOption.mock.calls.at(-1)![0]
+  expect(option.series.find((s: any) => s.name === 'SMA5')).toMatchObject({ data: [10, '-', 10], connectNulls: false })
+  expect(host.textContent).toContain('SMA10:—')
+  expect(option.series.find((s: any) => s.id === 'ma-crosses').data).toEqual([])
 })

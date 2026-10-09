@@ -4,18 +4,15 @@ import { fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import { structureSeries, type ChartStructures } from './chartStructures'
+import { movingAverageLines, movingAverageSeries, type MovingAverageOptions, type MovingAverageValues } from './chartMovingAverages'
 
-export interface OHLC {
+export interface OHLC extends MovingAverageValues {
   date: string
   open: number
   high: number
   low: number
   close: number
   volume?: number
-  ma5?: number | null
-  ma10?: number | null
-  ma20?: number | null
-  ma60?: number | null
   macd_dif?: number | null
   macd_dea?: number | null
   macd_hist?: number | null
@@ -328,6 +325,8 @@ interface Props {
   priceLines?: ChartPriceLine[]
   height?: number
   showMA?: boolean
+  /** Optional chart-specific MA display; omitted keeps the ordinary chart defaults. */
+  movingAverages?: MovingAverageOptions
   showInfoBar?: boolean
   showMarkers?: boolean
   onToggleMarkers?: () => void
@@ -352,10 +351,6 @@ const THEME = {
   bear: '#2D9B65',
   bullAlpha: 'rgba(240,68,56,0.7)',
   bearAlpha: 'rgba(18,183,106,0.7)',
-  ma5: '#A1A1AA',
-  ma10: '#3B82F6',
-  ma20: '#F97316',
-  ma60: '#8B5CF6',
   bg: 'transparent',
 }
 
@@ -483,10 +478,9 @@ function buildOption(
   volumeCompare: VolumeCompareConfig,
   addedDate: string | null | undefined,
   structures?: ChartStructures,
+  movingAverages?: MovingAverageOptions,
 ): EChartsOption {
   const candleData = data.map(d => [d.open, d.close, d.low, d.high])
-
-  const hasMA = showMA && data.some(d => d.ma5 != null || d.ma10 != null || d.ma20 != null || d.ma60 != null)
 
   const markPointData: any[] = []
   if (markers && markers.length > 0) {
@@ -691,19 +685,7 @@ function buildOption(
 
   series.push(...structureSeries(structures, dateIndexMap))
 
-  if (hasMA) {
-    const maLine = (key: keyof OHLC, color: string, name: string) => ({
-      name, type: 'line',
-      data: data.map(d => (d[key] != null ? Number(d[key]) : '-')),
-      smooth: true, symbol: 'none', animation: false,
-      silent: true,
-      lineStyle: { width: 1, color }, itemStyle: { color },
-    })
-    series.push(maLine('ma5', THEME.ma5, 'MA5'))
-    series.push(maLine('ma10', THEME.ma10, 'MA10'))
-    series.push(maLine('ma20', THEME.ma20, 'MA20'))
-    series.push(maLine('ma60', THEME.ma60, 'MA60'))
-  }
+  if (showMA) series.push(...movingAverageSeries(data, dateIndexMap, movingAverages))
 
   // 加入自选日标注: 蓝色竖虚线从该根K线的下沿连到主图底端的「自选」标签。
   // 用 custom series 而非 markLine: 两端要贴网格底边, 而 y 轴随 dataZoom 动态定界,
@@ -882,6 +864,7 @@ export function EChartsCandlestick({
   priceLines,
   height = 480,
   showMA = true,
+  movingAverages,
   showInfoBar = true,
   showMarkers: showMarkersProp = true,
   onToggleMarkers: _onToggleMarkers,
@@ -1036,10 +1019,10 @@ export function EChartsCandlestick({
     // 第二行: MA + BOLL
     if (showMA) {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;min-height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${Number(d.ma5).toFixed(2)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      for (const line of movingAverageLines(movingAverages)) {
+        const value = d[line.key]
+        if (value != null || movingAverages) html += `<span style="color:${line.color}">${line.name}:${value == null ? '—' : Number(value).toFixed(2)}</span>`
+      }
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
         html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
       }
@@ -1047,7 +1030,7 @@ export function EChartsCandlestick({
     }
 
     return html
-  }, [data, stockInfo, showMA, activeIndicators])
+  }, [data, stockInfo, showMA, movingAverages, activeIndicators])
   getInfoBarHTMLRef.current = getInfoBarHTML
 
   // data/symbol 变化时重置 infoIdx:
@@ -1267,6 +1250,7 @@ export function EChartsCandlestick({
       volumeCompare,
       addedDate,
       structures,
+      movingAverages,
     )
 
     chart.setOption(option, true)
@@ -1284,7 +1268,7 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, structures, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, structures, markers, ranges, priceLines, linkedPrice, showMA, movingAverages, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {
@@ -1317,10 +1301,10 @@ export function EChartsCandlestick({
     html += `</div>`
     if (showMA) {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;min-height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${Number(d.ma5).toFixed(2)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      for (const line of movingAverageLines(movingAverages)) {
+        const value = d[line.key]
+        if (value != null || movingAverages) html += `<span style="color:${line.color}">${line.name}:${value == null ? '—' : Number(value).toFixed(2)}</span>`
+      }
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
         html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
       }

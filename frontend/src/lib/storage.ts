@@ -55,6 +55,9 @@ export const storage = {
   /** 个股日K成交量对比设置 */
   stockVolumeCompare:   kv<{ enabled: boolean; days: number }>('stock_volume_compare'),
 
+  /** 缠论图均线类型、周期显隐和交叉标注；读取时校验旧值。 */
+  chanMovingAverages:    kv<unknown>('chan_moving_averages'),
+
   /** 个股详情多日分时周期 */
   stockPreviewIntradayDays: kv<number>('stock_preview_intraday_days'),
 

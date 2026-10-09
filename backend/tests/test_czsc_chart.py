@@ -272,3 +272,57 @@ def test_macd_uses_shared_pipeline_and_invalid_data_keeps_diagnostics(history):
     assert chart["rows"] == []
     assert len(chart["invalid_dates"]) == len(history)
     assert chart["coverage"]["signals"][0]["reasons"]["missing_data"] == len(history)
+
+
+def test_chart_moving_averages_have_full_windows_and_reset_after_invalid_data(history):
+    from app.indicators.czsc_chart import build_chart
+
+    # Monotone closes give independent, exact SMA expectations; all OHLC remain valid.
+    frame = history.head(131).with_columns(pl.Series("close", [float(i + 1) for i in range(131)]))
+    frame = frame.with_columns(pl.col("close").alias("open"),
+                               (pl.col("close") + 1).alias("high"),
+                               (pl.col("close") - .5).alias("low"))
+    split = frame[65, "date"]
+    frame = frame.with_columns(pl.when(pl.col("date") == split).then(None)
+                              .otherwise(pl.col("close")).alias("close"))
+    chart = build_chart(frame)
+    assert chart["invalid_dates"] == [split.isoformat()]
+    for rows in (chart["rows"][:65], chart["rows"][65:]):
+        for period in (5, 10, 20, 60):
+            alpha = 2 / (period + 1)
+            ema = rows[0]["close"]
+            for i, row in enumerate(rows):
+                ema = alpha * row["close"] + (1 - alpha) * ema
+                if i < period - 1:
+                    assert row[f"ma{period}"] is None
+                    assert row[f"ema{period}"] is None
+                else:
+                    assert row[f"ma{period}"] == pytest.approx(row["close"] - (period - 1) / 2)
+                    assert row[f"ema{period}"] == pytest.approx(ema)
+    # A later suffix must never change already published indicator values.
+    assert build_chart(frame.head(100))["rows"] == chart["rows"][:99]
+
+
+@pytest.mark.parametrize("timeframe", ["5m", "30m", "1w"])
+def test_moving_averages_use_aggregated_closed_bars(timeframe):
+    from app.indicators.czsc_bars import prepare_bars
+    from app.indicators.czsc_chart import build_chart
+
+    minute = timeframe.endswith("m")
+    if minute:
+        stamps = [datetime(2024, 1, 2) + timedelta(days=i // 240,
+                  minutes=(570 if i % 240 < 120 else 780) + i % 120 + 1)
+                  for i in range(720)]
+    else:
+        stamps = [date(2024, 1, 1) + timedelta(weeks=i // 5, days=i % 5) for i in range(60)]
+    closes = [float(i + 10) for i in range(len(stamps))]
+    frame = pl.DataFrame({"symbol": "600000.SH", "datetime" if minute else "date": stamps,
+                          "open": closes, "close": closes, "high": [c + 1 for c in closes],
+                          "low": [c - 1 for c in closes], "volume": 1., "amount": 100.})
+    now = datetime(2024, 1, 4, 11, 7, tzinfo=CN_TZ) if minute else datetime(2024, 3, 22, 14, tzinfo=CN_TZ)
+    bars = prepare_bars(frame, timeframe, now=now)
+    rows = build_chart(bars, timeframe=timeframe, now=now)["rows"]
+    assert len(rows) == len(bars) >= 5
+    assert rows[3]["ma5"] is None and rows[3]["ema5"] is None
+    assert rows[4]["ma5"] == pytest.approx(sum(bars["close"][:5]) / 5)
+    assert rows[-1]["ma5"] == pytest.approx(sum(bars["close"][-5:]) / 5)

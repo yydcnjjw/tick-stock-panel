@@ -480,18 +480,17 @@ def save_config(req: SaveConfigRequest, request: Request):
     engine = _get_engine(request)
     strategy = _get_public_strategy(engine, req.strategy_id)
     data_dir = _data_dir(request)
-    before = strategy_config.load_override(_data_dir(request), req.strategy_id)
+    before = strategy_config.load_override(data_dir, req.strategy_id)
 
     _validate_scoring_config(req.overrides)
     _validate_overlay_filter(strategy, req.overrides)
     # 剥离与策略默认值相同的字段，只保存用户真正修改过的值
     overrides = _strip_defaults(req.strategy_id, req.overrides, engine)
 
-    old = strategy_config.load_override(data_dir, req.strategy_id) or {}
     strategy_config.save_override(data_dir, req.strategy_id, overrides)
     # 叠加条件改变策略结果, 而策略结果缓存键不含 overrides → 变化时必须清,
     # 否则策略页读到旧缓存。仅在实际变化时清, 不波及普通保存。
-    if _overlay_changed(old.get("overlay_filter"), overrides.get("overlay_filter")):
+    if _overlay_changed(before.get("overlay_filter"), overrides.get("overlay_filter")):
         _invalidate_strategy_runtime(request)
     _invalidate_czsc_config(request, strategy, before, overrides)
     return {"ok": True}
@@ -515,6 +514,7 @@ def patch_config(req: SaveConfigRequest, request: Request):
     )
     if _overlay_changed(old_overlay, overrides.get("overlay_filter")):
         _invalidate_strategy_runtime(request)
+    _invalidate_czsc_config(request, strategy, before, overrides)
     return {"ok": True}
 
 

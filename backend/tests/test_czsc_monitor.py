@@ -142,11 +142,16 @@ def test_plain_rule_cannot_use_czsc_conditions(env, signal):
 
 
 def test_monitor_options_exclude_czsc(env):
+    from tests.signal_seeds import materialize_data_root
+
+    materialize_data_root(env.path)
     response = env.client.get("/api/monitor-rules/options")
     assert response.status_code == 200
     signals = {item["key"] for item in response.json()["builtin_signals"]}
     assert not signals.intersection(chan_signals.SIGNALS)
-    assert "signal_ma20_breakout" in signals
+    assert "signal_ma20_breakout" not in signals
+    custom = {item["key"] for item in response.json()["custom_signals"]}
+    assert "signal_ma20_breakout" in custom
 
 
 @pytest.mark.parametrize("snapshot", ["quotes", "empty", "outside_scope"])

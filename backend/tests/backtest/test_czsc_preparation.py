@@ -13,6 +13,13 @@ from app.indicators import chan_signals
 from app.strategy.engine import StrategyDef
 
 
+@pytest.fixture(autouse=True)
+def _migrated_signal_definitions(monkeypatch):
+    from tests.signal_seeds import install_pipeline_caches
+
+    install_pipeline_caches(monkeypatch)
+
+
 def test_panel_preparation_forwards_progress_cancellation_and_worker_limit(monkeypatch):
     panel = pl.DataFrame({"symbol": ["600000.SH"], "date": [date(2024, 1, 2)]})
     plan = SimpleNamespace(

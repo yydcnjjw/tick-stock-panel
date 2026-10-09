@@ -134,7 +134,9 @@ export interface CzscChartResponse {
   refreshed_at?: string
   generation?: string
   rows?: { date: string; open: number; high: number; low: number; close: number; volume: number;
-    amount: number; macd_dif: number; macd_dea: number; macd_hist: number }[]
+    amount: number; macd_dif: number; macd_dea: number; macd_hist: number;
+    ma5?: number | null; ma10?: number | null; ma20?: number | null; ma60?: number | null;
+    ema5?: number | null; ema10?: number | null; ema20?: number | null; ema60?: number | null }[]
   strokes?: CzscChartLine[]
   unfinished?: CzscChartLine[]
   segments?: CzscChartLine[]

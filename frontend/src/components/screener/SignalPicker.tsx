@@ -86,7 +86,7 @@ export function SignalPicker({ signals, onChange, kind, options }: Props) {
   const btnCls = variant === 'dialog'
     ? 'rounded px-1.5 py-0.5 text-[10px] font-medium border transition-colors cursor-pointer'
     : 'rounded-btn border px-2.5 py-1.5 text-[11px] transition-colors cursor-pointer'
-  const builtinOptions = (builtinSignals ?? CHAN_SIGNAL_DEFINITIONS.filter(sig => !filterCustomByKind || sig.kind === kind || sig.kind === 'both').map(sig => ({ key: sig.id, label: sig.name })))
+  const builtinOptions = (builtinSignals ?? CHAN_SIGNAL_DEFINITIONS.map(sig => ({ key: sig.id, label: sig.name })))
     .map(option => ({ ...option, key: normalizeStructureSignalId(option.key) }))
   // 场景过滤后仍保留已选 CZSC，便于修复旧配置。
   const visibleBuiltinOptions = [...builtinOptions, ...CZSC_SIGNAL_DEFINITIONS

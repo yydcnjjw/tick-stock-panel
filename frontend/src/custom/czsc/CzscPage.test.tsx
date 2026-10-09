@@ -7,23 +7,31 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import CzscPage from './CzscPage'
 import extension from './extension'
 import { QK } from '@/lib/queryKeys'
+import { storage } from '@/lib/storage'
 
 const fixture = vi.hoisted(() => ({ requests: [] as { symbol: string; timeframe: string; assetType?: string; resolve: (data: any) => void; reject: (error: Error) => void }[], syncCzscMinute: vi.fn(), provider: 'exchange_minute' as string | undefined, usable: true }))
 vi.mock('@/lib/api', () => ({ api: { czscChart: (symbol: string, timeframe: string, assetType?: string) => new Promise((resolve, reject) => fixture.requests.push({ symbol, timeframe, assetType, resolve, reject })), syncCzscMinute: fixture.syncCzscMinute } }))
 vi.mock('@/lib/useSharedQueries', () => ({ useCapabilityMatrix: () => ({ data: { capabilities: [{ id: 'czsc_minute', effective: fixture.provider, effective_display: fixture.provider, usable: fixture.usable }] } }) }))
 vi.mock('@/components/financials/StockFinancialSearch', () => ({ StockFinancialSearch: ({ onSelect, assetTypes }: any) => <div data-search-assets={assetTypes}><button onClick={() => onSelect('600001.SH')}>切股</button><button onClick={() => onSelect('000300.SH', '沪深300', 'index')}>切指数</button></div> }))
-vi.mock('@/components/EChartsCandlestick', () => ({ EChartsCandlestick: ({ data, structures, onDateClick }: any) => <button data-chart data-structures={JSON.stringify(structures)} onClick={() => onDateClick(data[0].date)}>{data[0].close}|笔{structures.segments.length}</button> }))
+vi.mock('@/components/EChartsCandlestick', () => ({ EChartsCandlestick: ({ data, structures, movingAverages, onDateClick }: any) => <button data-chart data-ma={JSON.stringify(movingAverages)} data-structures={JSON.stringify(structures)} onClick={() => onDateClick(data[0].date)}>{data[0].close}|笔{structures.segments.length}</button> }))
 
 let host: HTMLDivElement, root: Root, client: QueryClient
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  // Node may expose its own unavailable localStorage instead of jsdom's Storage.
+  vi.stubGlobal('localStorage', Object.create(Storage.prototype))
+  const saved = new Map<string, string>()
+  vi.spyOn(localStorage, 'getItem').mockImplementation(key => saved.get(key) ?? null)
+  vi.spyOn(localStorage, 'setItem').mockImplementation((key, value) => { saved.set(key, value) })
+  vi.spyOn(localStorage, 'removeItem').mockImplementation(key => { saved.delete(key) })
   fixture.requests.length = 0
+  storage.chanMovingAverages.remove()
   fixture.provider = 'exchange_minute'; fixture.usable = true
   fixture.syncCzscMinute.mockReset()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } })
 })
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove() })
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); host.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function Location() { return <output data-url>{useLocation().search}</output> }
 async function mount(entry = "/czsc?symbol=600000.SH") {
   await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><CzscPage /><Location /></MemoryRouter></QueryClientProvider>))
@@ -255,4 +263,48 @@ it('rejects an invalid asset URL without requesting or manually refreshing a dif
   expect(host.textContent).toContain('资产类型无效')
   expect(fixture.requests).toHaveLength(0)
   expect([...host.querySelectorAll('button')].find(b => b.textContent === '刷新')?.disabled).toBe(true)
+})
+
+it('defaults to all SMA lines and crosses, persists edits across stocks, periods and page reentry without refetching', async () => {
+  await mount(); fixture.requests[0].resolve(ready('600000.SH', 10)); await tick()
+  const config = () => JSON.parse(host.querySelector('[data-chart]')!.getAttribute('data-ma')!)
+  expect(config()).toEqual({ type: 'SMA', periods: [5, 10, 20, 60], showCrosses: true })
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === 'EMA')!.click())
+  const toggle = async (label: string) => {
+    await act(async () => [...host.querySelectorAll('label')].find(l => l.textContent === label)!.querySelector('input')!.click())
+  }
+  await toggle('EMA5'); await toggle('5↔10 交叉')
+  const saved = { type: 'EMA', periods: [10, 20, 60], showCrosses: false }
+  expect(config()).toEqual(saved)
+  expect(storage.chanMovingAverages.get(null)).toEqual(saved)
+  expect(fixture.requests).toHaveLength(1)
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '周线')!.click())
+  fixture.requests[1].resolve(ready('600000.SH', 20)); await tick()
+  expect(config()).toEqual(saved)
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '切指数')!.click())
+  fixture.requests[2].resolve({ ...ready('000300.SH', 3500), asset_type: 'index' }); await tick()
+  expect(config()).toEqual(saved)
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await mount(); await tick()
+  expect(config()).toEqual(saved)
+})
+
+it.each([null, 'bad', { type: 'WMA', periods: 'all', showCrosses: 'yes' }])('tolerates invalid saved MA settings: %s', async value => {
+  storage.chanMovingAverages.set(value)
+  await mount(); fixture.requests[0].resolve(ready('600000.SH', 10)); await tick()
+  expect(JSON.parse(host.querySelector('[data-chart]')!.getAttribute('data-ma')!)).toEqual({
+    type: 'SMA', periods: [5, 10, 20, 60], showCrosses: true,
+  })
+})
+
+it('restores all lines hidden and works when browser storage is unavailable', async () => {
+  storage.chanMovingAverages.set({ type: 'EMA', periods: [], showCrosses: true })
+  await mount(); fixture.requests[0].resolve(ready('600000.SH', 10)); await tick()
+  expect(JSON.parse(host.querySelector('[data-chart]')!.getAttribute('data-ma')!).periods).toEqual([])
+  const write = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+  try {
+    await act(async () => [...host.querySelectorAll('label')].find(l => l.textContent === 'EMA5')!.querySelector('input')!.click())
+    expect(JSON.parse(host.querySelector('[data-chart]')!.getAttribute('data-ma')!).periods).toEqual([5])
+  } finally { write.mockRestore() }
 })

@@ -8,6 +8,13 @@ from app.indicators import chan_signals as cs
 from app.market_time import CN_TZ
 
 
+@pytest.fixture(autouse=True)
+def _migrated_signal_definitions(monkeypatch):
+    from tests.signal_seeds import install_pipeline_caches
+
+    install_pipeline_caches(monkeypatch)
+
+
 def bars(n=12):
     return pl.DataFrame({
         "symbol": ["600000.SH"] * n,

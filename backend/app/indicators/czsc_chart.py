@@ -10,6 +10,9 @@ from app.indicators.chan_runtime import label_time
 from app.indicators.czsc_bars import closed_bars
 from app.market_time import cn_now
 
+MA_PERIODS = (5, 10, 20, 60)
+CHART_INDICATORS = ("macd_dif", "macd_dea", "macd_hist", *(f"{kind}{n}" for kind in ("ma", "ema") for n in MA_PERIODS))
+
 
 def structure_snapshot(state, timeframe="1d"):
     from app.vendor.chanpy.Common.CEnum import FX_TYPE
@@ -66,11 +69,17 @@ def build_chart(df: pl.DataFrame, *, now: datetime | None = None, timeframe="1d"
     valid = result.with_columns(invalid_expr.cast(pl.UInt32).cum_sum().alias("_segment")).filter(~invalid_expr)
     if not valid.is_empty():
         valid = valid.with_columns(pl.col("_segment").cast(pl.String).alias("symbol"))
-        valid = compute_indicators(valid, needed={"macd_dif", "macd_dea", "macd_hist"}).sort("date")
+        valid = compute_indicators(valid, needed=set(CHART_INDICATORS)).sort("date")
+        # Keep the pipeline's first-close EMA seed, but show only full chart windows.
+        # SMA readiness is per segment, so invalid bars restart both warmups.
+        valid = valid.with_columns([
+            pl.when(pl.col(f"ma{n}").is_not_null()).then(pl.col(f"ema{n}"))
+            .otherwise(None).alias(f"ema{n}") for n in MA_PERIODS
+        ])
     rows = []
     for row in valid.iter_rows(named=True):
         day = row["date"].isoformat(timespec="minutes") if timeframe.endswith("m") else row["date"].isoformat()
         rows.append({"date": day, **{k: row[k] for k in ("open", "high", "low", "close", "volume", "amount")},
-                     **{k: row[k] for k in ("macd_dif", "macd_dea", "macd_hist")}})
+                     **{k: row[k] for k in CHART_INDICATORS}})
     return {"rows": rows, **shapes, "signals": events, "invalid_dates": invalid_dates,
             "coverage": cs.coverage(result, set(cs.SIGNALS))}

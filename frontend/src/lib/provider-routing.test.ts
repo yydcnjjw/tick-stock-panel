@@ -8,6 +8,7 @@ const CAPS: Pick<CapabilityRoute, 'id' | 'field'>[] = [
   { id: 'adj_factor', field: 'adj_factor_provider' },
   { id: 'realtime', field: 'realtime_data_provider' },
   { id: 'minute', field: 'minute_data_provider' },
+  { id: 'czsc_minute', field: 'czsc_minute_data_provider' },
   { id: 'depth5', field: 'depth5_data_provider' },
   { id: 'financial', field: 'financial_data_provider' },
   { id: 'full_minute', field: 'full_minute_data_provider' },
@@ -18,6 +19,7 @@ const ALL_FIELDS: ProviderField[] = [
   'adj_factor_provider',
   'realtime_data_provider',
   'minute_data_provider',
+  'czsc_minute_data_provider',
   'depth5_data_provider',
   'financial_data_provider',
   'full_minute_data_provider',
@@ -47,6 +49,7 @@ describe('buildProviderRouting', () => {
     )
     expect(routing.adj_factor_provider).toBe('tickflow')
     expect(routing.financial_data_provider).toBe('tickflow')
+    expect(routing.czsc_minute_data_provider).toBe('exchange_minute')
   })
 
   it('每个可路由字段都被覆盖 (防止再漏能力)', () => {
@@ -81,8 +84,11 @@ describe('buildProviderRouting', () => {
     expect(Object.keys(routing).sort()).toEqual([...ALL_FIELDS].sort())
   })
 
-  it('默认路由覆盖全部字段且均为 tickflow', () => {
+  it('默认路由覆盖全部字段并保持结构分钟源独立', () => {
     expect(Object.keys(DEFAULT_ROUTING).sort()).toEqual([...ALL_FIELDS].sort())
-    expect(new Set(Object.values(DEFAULT_ROUTING))).toEqual(new Set(['tickflow']))
+    expect(DEFAULT_ROUTING.czsc_minute_data_provider).toBe('exchange_minute')
+    for (const field of ALL_FIELDS.filter(field => field !== 'czsc_minute_data_provider')) {
+      expect(DEFAULT_ROUTING[field]).toBe('tickflow')
+    }
   })
 })
