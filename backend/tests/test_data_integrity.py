@@ -5,23 +5,18 @@ null); 历史交易日的 quote_ts 时刻 < 15:00 即盘中快照 → 坏。
 """
 from __future__ import annotations
 
-import time
 from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
-import app.data_providers
 from app.market_time import CN_TZ, cn_today
-from app.services import data_integrity as di
 from app.services.data_integrity import (
     AUTO_REPAIR_MAX_LAG_DAYS,
     IntegrityIssue,
-    _candidate_days,
     _is_snapshot,
     _quote_ts_max_ms,
-    _trading_calendar,
     earliest_issue_day,
     prune_enriched_partitions,
     scan_recent_integrity,
@@ -271,7 +266,14 @@ def test_halt_filter_drops_legacy_zero_volume_row_after_ohlc_fill():
     assert result["symbol"].to_list() == ["600001.SH"]
 
 
-def test_missing_tail_day_flagged(tmp_path):
+@pytest.fixture
+def confirmed_trading_days(monkeypatch):
+    from app.services import trading_day
+
+    monkeypatch.setattr(trading_day, "historical_trading_day_status", lambda days: dict.fromkeys(days, True))
+
+
+def test_missing_tail_day_flagged(tmp_path, confirmed_trading_days):
     # 周四有数据, 周五(工作日)整天停机缺失, 今天周一启动
     _write_daily_partition(tmp_path, "kline_daily", THURSDAY, None)
     issues = scan_recent_integrity(tmp_path, today=TODAY)
@@ -280,7 +282,33 @@ def test_missing_tail_day_flagged(tmp_path):
     ]
 
 
-def test_snapshot_and_missing_both_reported(tmp_path):
+@pytest.mark.parametrize("verdict, expected_kind", [(False, None), (True, "missing"), (None, "calendar_unknown")])
+def test_mid_autumn_tail_requires_calendar_evidence(tmp_path, monkeypatch, verdict, expected_kind):
+    from app.services import trading_day
+
+    holiday = date(2026, 9, 25)
+    calls = []
+
+    def classify(days):
+        calls.append(set(days))
+        return {day: verdict for day in days}
+
+    monkeypatch.setattr(trading_day, "historical_trading_day_status", classify)
+    for table in ("kline_daily", "kline_etf_daily", "kline_index_daily"):
+        _write_daily_partition(tmp_path, table, date(2026, 9, 24), None)
+    issues = scan_recent_integrity(tmp_path, today=date(2026, 9, 28))
+
+    assert [(i.day, i.table, i.kind) for i in issues] == (
+        [] if expected_kind is None else [
+            (holiday, table, expected_kind)
+            for table in ("kline_daily", "kline_etf_daily", "kline_index_daily")
+        ]
+    )
+    assert calls == [{holiday}]  # 同一轮扫描三类资产只查一次日历
+    assert earliest_issue_day(issues) == (holiday if verdict is True else None)
+
+
+def test_snapshot_and_missing_both_reported(tmp_path, confirmed_trading_days):
     # 周四盘中快照 + 周五缺失
     _write_daily_partition(tmp_path, "kline_daily", THURSDAY, _ts_ms(THURSDAY, time(13, 30)))
     issues = scan_recent_integrity(tmp_path, today=TODAY)
@@ -426,6 +454,117 @@ class _QuoteServiceStub:
         self.enabled = False
 
 
+@pytest.fixture
+def mid_autumn_calendar(monkeypatch):
+    from app.data_providers import custom
+    from app.services import data_integrity
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 28, 11, 0, tzinfo=CN_TZ)
+
+    monkeypatch.setattr(data_integrity, "datetime", FixedDateTime)
+    calendar = {date(2026, 9, 24), date(2026, 9, 28)}
+    monkeypatch.setattr(custom, "names", lambda: {"calendar_plugin"})
+    monkeypatch.setattr(custom, "get_provider", lambda name: SimpleNamespace(trading_days=lambda: calendar))
+    return calendar
+
+
+@pytest.mark.parametrize("calendar_state", ["holiday", "trading", "outdated", "empty", "snapshot_unknown"])
+def test_realtime_calendar_gate_http(tmp_path, monkeypatch, mid_autumn_calendar, calendar_state):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import settings as settings_api
+    from app.services import data_integrity
+
+    holiday = date(2026, 9, 25)
+    if calendar_state == "trading":
+        mid_autumn_calendar.add(holiday)
+    elif calendar_state == "outdated":
+        mid_autumn_calendar.remove(date(2026, 9, 28))
+    elif calendar_state in ("empty", "snapshot_unknown"):
+        mid_autumn_calendar.clear()
+    for table in ("kline_daily", "kline_etf_daily", "kline_index_daily"):
+        _write_daily_partition(tmp_path, table, date(2026, 9, 24), None)
+    if calendar_state == "snapshot_unknown":
+        _write_daily_partition(tmp_path, "kline_daily", date(2026, 9, 24), _ts_ms(date(2026, 9, 24), time(11)))
+
+    launched, saved = [], {}
+    monkeypatch.setattr(data_integrity, "launch_integrity_repair",
+                        lambda state, day, reason: (launched.append(day) or ("repair-test", True)))
+    monkeypatch.setattr("app.services.preferences.save", lambda payload: saved.update(payload))
+    qs = _QuoteServiceStub()
+    app = FastAPI()
+    app.include_router(settings_api.router)
+    state = _gate_state(tmp_path, qs, repo=None).app.state
+    for key, value in vars(state).items():
+        setattr(app.state, key, value)
+    with TestClient(app) as client:
+        response = client.put("/api/settings/preferences/realtime-quotes", json={"realtime_quotes_enabled": True})
+    if calendar_state == "holiday":
+        assert response.status_code == 200
+        assert response.json()["realtime_quotes_enabled"] is True
+        assert qs.enabled and saved == {"realtime_quotes_enabled": True}
+        assert launched == []
+    else:
+        assert response.status_code == 409
+        assert not qs.enabled and saved == {}
+        detail = response.json()["detail"]
+        assert "2026-09-25" in detail
+        if calendar_state == "trading":
+            assert launched == [holiday]
+            assert "数据为缺失" in detail
+        elif calendar_state == "snapshot_unknown":
+            assert launched == [date(2026, 9, 24)]
+            assert "交易日历暂无法核验" in detail
+            assert "通过日历核验后才能开启" in detail
+        else:
+            assert launched == []
+            assert "交易日历暂无法核验" in detail
+            assert "数据为缺失" not in detail
+
+
+@pytest.mark.parametrize("has_snapshot", [False, True])
+def test_boot_calendar_unknown_never_repairs_unverified_day(
+    tmp_path, monkeypatch, mid_autumn_calendar, has_snapshot,
+):
+    from app.services import data_integrity
+
+    mid_autumn_calendar.clear()
+    previous = date(2026, 9, 24)
+    stamp = _ts_ms(previous, time(11)) if has_snapshot else None
+    _write_daily_partition(tmp_path, "kline_daily", previous, stamp)
+    launched = []
+    monkeypatch.setattr(data_integrity, "launch_integrity_repair",
+                        lambda state, day, reason: (launched.append(day) or ("repair-test", True)))
+    state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=tmp_path)))
+    data_integrity.boot_integrity_check(state)
+    assert launched == ([previous] if has_snapshot else [])
+
+
+def test_realtime_gate_scan_failure_does_not_enable_or_repair(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+
+    from app.api import settings as settings_api
+    from app.services import data_integrity
+
+    def broken_scan(*args, **kwargs):
+        raise OSError("unreadable partition")
+
+    monkeypatch.setattr(data_integrity, "scan_recent_integrity", broken_scan)
+    saved, launched = [], []
+    monkeypatch.setattr("app.services.preferences.save", saved.append)
+    monkeypatch.setattr(data_integrity, "launch_integrity_repair", lambda *args: launched.append(args))
+    qs = _QuoteServiceStub()
+    with pytest.raises(HTTPException, match="历史数据完整性暂无法核验"):
+        settings_api.update_realtime_quotes(
+            settings_api.RealtimeQuotesPrefs(realtime_quotes_enabled=True), _gate_state(tmp_path, qs, repo=None),
+        )
+    assert not qs.enabled and saved == [] and launched == []
+
+
 def test_realtime_gate_blocks_on_snapshot_and_launches_repair(tmp_path, monkeypatch):
     from fastapi import HTTPException
 
@@ -433,7 +572,9 @@ def test_realtime_gate_blocks_on_snapshot_and_launches_repair(tmp_path, monkeypa
     from app.services import data_integrity
 
     real_today = datetime.now(CN_TZ).date()
-    snapshot_day = _recent_trading_day_before(real_today)
+    snapshot_day = real_today - timedelta(days=1)
+    while snapshot_day.weekday() >= 5:
+        snapshot_day -= timedelta(days=1)
     _write_daily_partition(
         tmp_path, "kline_daily", snapshot_day,
         _ts_ms(snapshot_day, time(11, 58)),
@@ -496,7 +637,9 @@ def test_realtime_gate_allows_clean_data(tmp_path, monkeypatch):
     from app.api import settings as settings_api
 
     real_today = datetime.now(CN_TZ).date()
-    previous_day = _recent_trading_day_before(real_today)
+    previous_day = real_today - timedelta(days=1)
+    while previous_day.weekday() >= 5:
+        previous_day -= timedelta(days=1)
     _write_daily_partition(tmp_path, "kline_daily", previous_day, None)
     _write_daily_partition(
         tmp_path, "kline_daily", real_today,
@@ -555,7 +698,9 @@ def test_boot_check_launches_repair_within_window(tmp_path, monkeypatch):
     )
 
     real_today = datetime.now(CN_TZ).date()
-    probe = _recent_trading_day_before(real_today)
+    probe = real_today - timedelta(days=1)
+    while probe.weekday() >= 5:
+        probe -= timedelta(days=1)
     data_dir = tmp_path / "boot"
     _write_daily_partition(data_dir, "kline_daily", probe, _ts_ms(probe, time(11, 58)))
     _write_daily_partition(data_dir, "kline_daily", real_today, _ts_ms(real_today, time(10, 0)))
@@ -592,7 +737,9 @@ def test_pipeline_self_heals_snapshot_day(tmp_path, monkeypatch):
     from app.tickflow.repository import DataStore, KlineRepository
 
     today = datetime.now(CN_TZ).date()
-    yesterday = _recent_trading_day_before(today)
+    yesterday = today - timedelta(days=1)
+    while yesterday.weekday() >= 5:
+        yesterday -= timedelta(days=1)
 
     _write_full_partition(tmp_path, "kline_daily", yesterday, _ts_ms(yesterday, time(11, 58)))
     _write_full_partition(tmp_path, "kline_daily", today, _ts_ms(today, time(10, 0)))
@@ -629,6 +776,44 @@ def test_pipeline_self_heals_snapshot_day(tmp_path, monkeypatch):
     )
     assert enriched_left == [f"date={yesterday.isoformat()}", f"date={today.isoformat()}"]
     assert result["enriched_days"] > 0
+
+
+def test_pipeline_unknown_calendar_does_not_schedule_repair(tmp_path, monkeypatch, caplog):
+    from app.config import settings as app_settings
+    from app.jobs import daily_pipeline
+    from app.services import data_integrity, instrument_sync, kline_sync, preferences
+    from app.tickflow.capabilities import Cap
+    from app.tickflow.repository import DataStore, KlineRepository
+
+    today = datetime.now(CN_TZ).date()
+    unknown_day = today - timedelta(days=1)
+    while unknown_day.weekday() >= 5:
+        unknown_day -= timedelta(days=1)
+    _write_full_partition(tmp_path, "kline_daily", today, None)
+    monkeypatch.setattr(app_settings, "data_dir", tmp_path)
+    monkeypatch.setattr(instrument_sync, "sync_instruments", lambda data_dir: 0)
+    monkeypatch.setattr(preferences, "get_daily_data_provider", lambda: "tickflow")
+    monkeypatch.setattr(data_integrity, "scan_recent_integrity", lambda *args, **kwargs: [
+        IntegrityIssue(unknown_day, "kline_daily", "calendar_unknown"),
+    ])
+    refreshed, pruned = [], []
+
+    def unexpected_batch(*args, **kwargs):
+        raise AssertionError("日历未知不得触发历史范围修复")
+
+    monkeypatch.setattr(kline_sync, "sync_daily_by_quotes", lambda repo: refreshed.append(today) or 0)
+    monkeypatch.setattr(kline_sync, "sync_and_persist_daily_batch", unexpected_batch)
+    monkeypatch.setattr(data_integrity, "prune_enriched_partitions", lambda *args: pruned.append(args) or 0)
+    repo = KlineRepository(DataStore(tmp_path))
+    capset = SimpleNamespace(has=lambda key: key == Cap.QUOTE_POOL)
+
+    result = daily_pipeline.run_now(repo, capset)
+
+    assert refreshed == [today]  # 正常同步继续, 不因日历未知降级到历史修复
+    assert pruned == []
+    assert result["integrity_repair_from"] is None
+    assert result["integrity_issues"] == 0
+    assert "交易日历暂无法核验" in caplog.text
 
 
 def test_quotes_flush_partition_keeps_quote_ts_for_integrity_scan(tmp_path, monkeypatch):
@@ -668,95 +853,19 @@ def test_quotes_flush_partition_keeps_quote_ts_for_integrity_scan(tmp_path, monk
     assert _quote_ts_max_ms(part_dir) == snapshot_ms
 
 
-# ── 交易日历: 候选日真实化 (2026 中秋 09-25 休市误报 missing → gate 409) ──
-#
-# issue #442: _candidate_days 用「周一~周五」近似交易日, 中秋休市日 09-25(周五)
-# 被当缺失日, realtime_gate 循环 409 (修复任务对休市日永远拉不到数据)。
-
-_CAL_FAKE_2026_09 = {
-    date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24),
-    date(2026, 9, 28),
-}  # 2026-09-25(五)~09-27(日) 中秋休市, 09-28(一) 开市
-
-
-@pytest.fixture(autouse=True)
-def _no_trading_calendar_by_default():
-    """默认把模块级日历缓存置为「过期」: 既有用例维持周几近似语义 (CI 无
-    fuyao → 探测即回退, 零外部依赖); 日历相关用例自行写入 fake 日历。
-    (fetched_at=0.0 表示 TTL 已过, 不用 time.monotonic — 本文件顶部
-    `from datetime import time` 会遮蔽标准库 time。)"""
-    saved = di._CAL
-    di._CAL = (0.0, None)
-    yield
-    di._CAL = saved
-
-
-def _patch_fuyao_calendar(monkeypatch, days):
-    fake = SimpleNamespace(
-        is_custom_provider=lambda name: True,
-        get_provider=lambda name: SimpleNamespace(trading_days=lambda: set(days)),
-    )
-    monkeypatch.setattr(app.data_providers, "custom", fake)
-    di._CAL = (0.0, None)  # 清缓存, 强制本用例走自己的日历
-
-
-def _recent_trading_day_before(day: date) -> date:
-    """严格早于 day 的最近交易日: 日历可用按日历, 否则周几近似。
-
-    取代旧的 `while d.weekday() >= 5` 探针 —— 节假日(如 2026 中秋 09-25)
-    后该探针会命中休市日, 而休市日在日历语义下不再是候选日。
-    """
-    cal = _trading_calendar()
-    d = day - timedelta(days=1)
-    while True:
-        if cal is not None:
-            if d in cal:
-                return d
-        elif d.weekday() < 5:
-            return d
-        d -= timedelta(days=1)
-
-
-def test_candidate_days_excludes_market_holiday(monkeypatch):
-    """中秋休市日不得进候选日; 真实交易日保留; 今天被严格排除。"""
-    _patch_fuyao_calendar(monkeypatch, _CAL_FAKE_2026_09)
-    got = _candidate_days(date(2026, 9, 28), 7)
-    assert date(2026, 9, 25) not in got
-    assert date(2026, 9, 24) in got
-    assert date(2026, 9, 28) not in got
-
-
-def test_candidate_days_falls_back_to_weekday_without_calendar(monkeypatch):
-    """未配置 fuyao apikey → 直接降级周几近似 (近似会把节假日误报为缺失日)。"""
-    fake = SimpleNamespace(is_custom_provider=lambda name: False)
-    monkeypatch.setattr(app.data_providers, "custom", fake)
-    got = _candidate_days(date(2026, 9, 28), 7)
-    assert got == [
-        date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23),
-        date(2026, 9, 24), date(2026, 9, 25),
-    ]
-
-
-def test_calendar_fetch_failure_serves_last_known(monkeypatch):
-    """fuyao 抖动时沿用上次成功结果 (stale-while-error), 不退回周几近似。"""
-    _patch_fuyao_calendar(monkeypatch, _CAL_FAKE_2026_09)
-    assert _trading_calendar() == _CAL_FAKE_2026_09
-
-    def _boom():
-        raise RuntimeError("fuyao down")
-
-    fake = SimpleNamespace(
-        is_custom_provider=lambda name: True,
-        get_provider=lambda name: SimpleNamespace(trading_days=_boom),
-    )
-    monkeypatch.setattr(app.data_providers, "custom", fake)
-    di._CAL = (0.0, _CAL_FAKE_2026_09)  # fetched_at=0 → TTL 过期 → 重新探测失败
-    assert _trading_calendar() == _CAL_FAKE_2026_09
-
-
-def test_scan_no_false_missing_when_etf_lags_over_holiday(tmp_path, monkeypatch):
-    """端到端: ETF 表停在休市前最后一个交易日 + 日历可用 → 扫描不误报 missing。"""
-    _patch_fuyao_calendar(monkeypatch, _CAL_FAKE_2026_09)
-    for day in (date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24)):
-        _write_daily_partition(tmp_path, "kline_etf_daily", day, None)
+@pytest.mark.parametrize("calendar_available", [True, False])
+def test_scan_etf_holiday_uses_current_calendar_evidence(
+    tmp_path, mid_autumn_calendar, calendar_available,
+):
+    """A covered holiday is clean; unavailable evidence never becomes a gap."""
+    previous = date(2026, 9, 24)
+    holiday = date(2026, 9, 25)
+    _write_daily_partition(tmp_path, "kline_etf_daily", previous, None)
     assert scan_recent_integrity(tmp_path, today=date(2026, 9, 28)) == []
+    if not calendar_available:
+        mid_autumn_calendar.clear()
+    issues = scan_recent_integrity(tmp_path, today=date(2026, 9, 28))
+    assert issues == ([] if calendar_available else [
+        IntegrityIssue(holiday, "kline_etf_daily", "calendar_unknown"),
+    ])
+    assert earliest_issue_day(issues) is None

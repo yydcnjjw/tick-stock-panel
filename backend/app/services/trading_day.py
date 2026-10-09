@@ -1,4 +1,7 @@
-"""交易日探针 (oracle) — 回答「今天是否 A 股交易日」。
+"""交易日判定: 当天轮询探针及历史完整性检查。
+
+historical_trading_day_status 只用已加载源的有界日历回答历史日期, 不复用当天
+探针或其缓存。以下探测链及 TTL 均属于 is_trading_day 的当天轮询判断。
 
 消费方 (实时行情轮询 / 盘中分钟增量) 在周几+时段门控之后调用, 用于把
 「工作日但休市」的节假日从轮询窗口里剔除; 返回 None (未知) 时调用方
@@ -26,8 +29,10 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, time as dt_time
+from datetime import date, datetime
+from datetime import time as dt_time
 
 from app.market_time import CN_TZ, cn_now
 
@@ -54,6 +59,47 @@ class _Cache:
 
 
 _CACHE = _Cache()
+
+
+def historical_trading_day_status(days: Iterable[date]) -> dict[date, bool | None]:
+    """历史日期的交易日三态, 仅使用已加载源的可选 trading_days 日历。
+
+    集合必须包含最早与最晚日期之间的所有 A 股交易日; 区间外、空/失败/
+    非法响应或源间冲突均为未知。当前行情时间戳不能证明历史日期是否休市。
+    仅完整性扫描有疑似尾部缺口时批量调用, 不进入实时轮询热路径、不缓存失败。
+    """
+    from app.data_providers import custom as custom_sources
+
+    result: dict[date, bool | None] = {
+        day: False if day.weekday() >= 5 else None for day in days
+    }
+    evidence: dict[date, set[bool]] = {
+        day: set() for day, verdict in result.items() if verdict is None
+    }
+    if not evidence:
+        return result
+    for name in sorted(custom_sources.names()):
+        try:
+            provider = custom_sources.get_provider(name)
+            fetch = getattr(provider, "trading_days", None)
+            if not callable(fetch):
+                continue
+            calendar = fetch()
+            if (
+                not isinstance(calendar, (set, frozenset)) or not calendar
+                or any(type(day) is not date for day in calendar)
+            ):
+                continue
+            first, last = min(calendar), max(calendar)
+            for day, verdicts in evidence.items():
+                if first <= day <= last:
+                    verdicts.add(day in calendar)
+        except Exception:  # 单源不可用不伪造休市, 其他已加载源仍可提供日历
+            continue
+    for day, verdicts in evidence.items():
+        if len(verdicts) == 1:
+            result[day] = next(iter(verdicts))
+    return result
 
 
 def reset_cache() -> None:
