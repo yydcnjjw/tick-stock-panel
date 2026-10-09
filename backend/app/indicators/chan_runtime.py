@@ -59,6 +59,8 @@ class ChanReplay:
         self.baseline = False
         self._ready_levels: set[str] = set()
         self._boundaries: dict[str, int] = {}
+        self.fractal_events: list[dict] = []
+        self._last_fractal_candle = -1
 
     def point_key(self, point, level):
         return level, point.bi.get_end_klu().idx, bool(point.is_buy)
@@ -85,6 +87,7 @@ class ChanReplay:
             # Upstream asserts and arithmetic errors must not become false signals.
             raise ValueError(f"chan.py 结构计算失败 ({self.symbol}, {stamp}): {exc}") from exc
         self.rows.append(row)
+        self.fractal_events = self._new_fractals(stamp)
         added = []
         lists = [("bi", self.level.bs_point_lst)]
         if self.collect_structure:
@@ -124,6 +127,24 @@ class ChanReplay:
                     if level == "bi":
                         added.append(event)
         return added
+
+    def _new_fractals(self, stamp):
+        from app.vendor.chanpy.Common.CEnum import FX_TYPE
+
+        if len(self.level.lst) < 3:
+            return []
+        candle = self.level.lst[-2]
+        if candle.idx <= self._last_fractal_candle:
+            return []
+        self._last_fractal_candle = candle.idx
+        if candle.fx not in (FX_TYPE.TOP, FX_TYPE.BOTTOM):
+            return []
+        top = candle.fx == FX_TYPE.TOP
+        unit = candle.get_peak_klu(top)
+        endpoint = label_time(self.rows[unit.idx]["date"], self.timeframe)
+        return [{"event_id": f"{self.symbol}:{self.timeframe}:fx:{endpoint}:{int(top)}",
+                 "endpoint_at": endpoint, "confirmed_at": stamp,
+                 "kind": "top" if top else "bottom", "price": unit.high if top else unit.low}]
 
     def points_snapshot(self):
         result = []

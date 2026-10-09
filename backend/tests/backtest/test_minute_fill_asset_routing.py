@@ -109,7 +109,7 @@ def test_etf_minute_fill_reads_etf_minute_partition(mode, symbol):
     repo = _MinuteRepo()
     engine = BacktestEngine(repo=repo)  # type: ignore[arg-type]
     panel = _panel(symbol)
-    engine.load_panel_for_backtest = lambda symbols, s, e, plan, asset_type="stock": panel  # type: ignore[method-assign]
+    engine.load_panel_for_backtest = lambda symbols, s, e, plan, asset_type="stock", **kwargs: panel  # type: ignore[method-assign]
     service = StrategyBacktestService(engine=engine, strategy_engine=_StrategyEngineStub())
 
     result = service.run(StrategyBacktestConfig(

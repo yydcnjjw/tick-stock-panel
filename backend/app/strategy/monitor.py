@@ -36,6 +36,8 @@ def czsc_strategy_monitor_warning(strategy, overrides: dict | None = None) -> st
     """只检查生效依赖, 不加载 chan.py 原生组件或计算日线信号。"""
     from app.strategy.engine import StrategyEngine
 
+    if strategy.meta.get("backtest_only"):
+        return strategy.meta.get("live_block_reason", "该策略仅支持回测")
     if reason := chan_signals.retirement_reason(strategy, overrides):
         return reason
     names = list(getattr(strategy, "required_features", ()) or ())

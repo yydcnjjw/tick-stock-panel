@@ -900,6 +900,7 @@ def test_registered_builtin_matrix_strategies_share_one_cache_profile():
     strategies = tuple(
         s for s in engine.strategy_definitions()
         if s.execution_backend != "minute_filter"
+        and not s.meta.get("backtest_block_reason")
     )
 
     # 25 个 matrix 策略夹具 (研究模板在 research 目录, 不在夹具目录)

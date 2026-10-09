@@ -181,6 +181,8 @@ def merge_signal_matrices(
     from app.backtest.matrix import make_signal_matrix
 
     n_times, n_assets = shape
+    if any(s.center_features is not None for s in sigs):
+        raise ValueError("中枢震荡持仓状态不能合并为叠加信号")
     n_children = len(sigs)
     if n_children == 0:
         return make_signal_matrix(shape)

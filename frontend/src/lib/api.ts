@@ -871,6 +871,13 @@ export interface StrategyParamDef {
   visible_if?: ParamVisibleIf
   /** UI 元数据: select 各选项被选中时批量应用的参数值 (如标的池预设 → 开关+默认值) */
   option_applies?: Record<string, Record<string, string | number | boolean>>
+  option_details?: Record<string, {
+    risk_reference?: 'center_lower' | 'c_low'
+    description?: string
+    risk_sizing?: boolean
+    risk_fraction?: number
+    position_cap?: number
+  }>
 }
 
 export interface CompositeChildInfo {
@@ -881,6 +888,10 @@ export interface CompositeChildInfo {
 }
 
 export interface StrategyDetail {
+  backtest_only?: boolean
+  backtest_block_reason?: string | null
+  backtest_exploratory_param?: string | null
+  backtest_exploratory_warning?: string | null
   execution_available?: boolean
   execution_unavailable_reason?: string | null
   id: string
@@ -1863,6 +1874,21 @@ export interface ResearchCandidateCreate {
 
 // ===== Strategy Backtest =====
 export interface StrategyBacktestTrade {
+  center_reference?: {
+    low: number; high: number; phase: 'range' | '123'
+    entry_equity?: number; risk_budget_amount?: number; planned_risk_amount?: number
+    risk_low?: number
+    evidence_tier?: 'daily_pen_auxiliary'
+    exit_evidence?: {
+      first_rebound?: { start: number; end: number; high: number }
+      departure?: { c_end: number; c_low: number; a_area: number; c_area: number; observed_at: number }
+    }
+    lesson24?: {
+      center: number; low: number; high: number
+      a_start: number; a_end: number; c_start: number; c_end: number
+      c_low: number; a_area: number; c_area: number; observed_at: number
+    }
+  } | null
   symbol: string
   name?: string
   entry_date: string
