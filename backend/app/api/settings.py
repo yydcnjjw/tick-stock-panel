@@ -994,9 +994,13 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
         if repo is not None:
             try:
                 issues = data_integrity.scan_recent_integrity(repo.store.data_dir)
-            except Exception:  # noqa: BLE001
-                issues = []
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="历史数据完整性暂无法核验。请稍后重试。实时行情尚未开启",
+                ) from exc
             earliest = data_integrity.earliest_issue_day(issues)
+            unknown = [i for i in issues if i.kind == "calendar_unknown"]
             if issues and data_integrity.within_auto_repair_window(earliest):
                 job_id, is_new = data_integrity.launch_integrity_repair(
                     request.app.state, earliest, "realtime_gate",
@@ -1004,11 +1008,21 @@ def update_realtime_quotes(req: RealtimeQuotesPrefs, request: Request) -> dict:
                 if job_id is not None:
                     detail = (
                         f"检测到{data_integrity.describe_issues(issues)}，"
-                        + ("已自动创建修复任务，完成后即可开启实时行情"
+                        + ("已自动创建修复任务，请等待修复完成"
                            if is_new else "修复任务正在进行中，请稍后再开启")
                         + f"（任务 {job_id}）"
                     )
+                    if unknown:
+                        detail += "。待核验日期还需通过日历核验后才能开启实时行情"
                     raise HTTPException(status_code=409, detail=detail)
+            if unknown:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{data_integrity.describe_issues(unknown)}。"
+                        "请检查日历数据源后重试。实时行情尚未开启。未因待核验日期创建修复任务"
+                    ),
+                )
 
     preferences.save({"realtime_quotes_enabled": req.realtime_quotes_enabled})
     if qs:

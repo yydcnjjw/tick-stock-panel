@@ -244,6 +244,10 @@ def run_now(
             integrity_issues = data_integrity.scan_recent_integrity(
                 repo.store.data_dir, today=today,
             )
+            unknown = [i for i in integrity_issues if i.kind == "calendar_unknown"]
+            if unknown:
+                logger.warning("integrity: %s, 不触发自动修复", data_integrity.describe_issues(unknown))
+            integrity_issues = [i for i in integrity_issues if i.kind != "calendar_unknown"]
             if integrity_issues:
                 stale_day = data_integrity.earliest_issue_day(integrity_issues, ("kline_daily",))
                 etf_stale_day = data_integrity.earliest_issue_day(integrity_issues, ("kline_etf_daily",))

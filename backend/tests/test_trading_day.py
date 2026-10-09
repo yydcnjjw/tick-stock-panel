@@ -8,7 +8,8 @@ tickflow 戳的 OR 语义与开盘缓冲窗、失败/无权限 → None、TTL �
 
 from __future__ import annotations
 
-from datetime import date, datetime, time as dt_time, timezone, timedelta
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -276,3 +277,77 @@ def test_unknown_verdict_is_cached_within_short_ttl(monkeypatch):
     assert is_trading_day(monday) is None
     assert is_trading_day(monday) is None
     assert calls == {"fuyao": 1, "tickflow": 1}
+
+
+def _historical_sources(monkeypatch, providers):
+    from app.data_providers import custom
+
+    monkeypatch.setattr(custom, "names", lambda: set(providers))
+    monkeypatch.setattr(custom, "get_provider", providers.__getitem__)
+    _no_probes(monkeypatch)  # 历史判断不得读取当前快照戳或当天探针缓存
+
+
+def test_historical_calendar_classifies_only_covered_dates(monkeypatch):
+    first, last = date(2026, 9, 24), date(2026, 9, 28)
+    calls = []
+
+    def calendar():
+        calls.append(True)
+        return {first, last}
+
+    _historical_sources(monkeypatch, {"other_provider": SimpleNamespace(trading_days=calendar)})
+    days = [date(2026, 9, 23), first, date(2026, 9, 25), date(2026, 9, 26), last, date(2026, 9, 29)]
+    assert trading_day.historical_trading_day_status(days) == dict(zip(days, [None, True, False, False, True, None], strict=True))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("calendar", [set(), None, [], {"20260924"}, {date(2026, 9, 24), "bad"}])
+def test_historical_calendar_invalid_or_empty_is_unknown(monkeypatch, calendar):
+    _historical_sources(monkeypatch, {"other_provider": SimpleNamespace(trading_days=lambda: calendar)})
+    day = date(2026, 9, 25)
+    assert trading_day.historical_trading_day_status([day]) == {day: None}
+
+
+def test_historical_calendar_error_recovers_on_next_scan(monkeypatch):
+    calls = []
+
+    def calendar():
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError("calendar unavailable")
+        return {date(2026, 9, 24), date(2026, 9, 28)}
+
+    _historical_sources(monkeypatch, {"other_provider": SimpleNamespace(trading_days=calendar)})
+    day = date(2026, 9, 25)
+    assert trading_day.historical_trading_day_status([day]) == {day: None}
+    assert trading_day.historical_trading_day_status([day]) == {day: False}
+
+
+@pytest.mark.parametrize("providers", [{}, {"without_calendar": SimpleNamespace()}])
+def test_historical_calendar_unavailable_is_unknown(monkeypatch, providers):
+    _historical_sources(monkeypatch, providers)
+    day = date(2026, 9, 25)
+    assert trading_day.historical_trading_day_status([day]) == {day: None}
+
+
+def test_historical_conflicting_calendars_are_unknown(monkeypatch):
+    first, last, holiday = date(2026, 9, 24), date(2026, 9, 28), date(2026, 9, 25)
+    _historical_sources(monkeypatch, {
+        "a": SimpleNamespace(trading_days=lambda: {first, last}),
+        "b": SimpleNamespace(trading_days=lambda: {first, holiday, last}),
+    })
+    assert trading_day.historical_trading_day_status([holiday]) == {holiday: None}
+
+
+def test_fuyao_calendar_rejects_invalid_rows(monkeypatch):
+    from app.plugins.fuyao.client import FuyaoError
+    from app.plugins.fuyao.provider import FuyaoProvider
+
+    provider = FuyaoProvider()
+    monkeypatch.setattr(provider, "_get_client", lambda: SimpleNamespace(trading_days=lambda: [
+        {"date_ms": int(datetime(2026, 9, 24, tzinfo=CN).timestamp() * 1000)},
+        {"date_ms": "invalid"},
+        {"date_ms": int(datetime(2026, 9, 28, tzinfo=CN).timestamp() * 1000)},
+    ]))
+    with pytest.raises(FuyaoError, match="交易日历包含无法解析的日期"):
+        provider.trading_days()

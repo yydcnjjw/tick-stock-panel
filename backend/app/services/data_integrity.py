@@ -10,10 +10,10 @@
 - d < 今天 且 时刻 ≥ d 15:00 → 尾盘定版 (close_final) → 完整
 - batch 权威行中仅夹杂少量零成交实时行 → 停牌残留 → 忽略
 - d == 今天         → 实时更新中, 属正常, 不校验
-- 分区缺失的工作日  → 缺口 (工作日近似; 节假日误报的代价是一次空范围拉取,
-  merge-upsert 空写, 无害)
+- 分区缺失且日历确认为交易日 → 缺口; 确认休市 → 跳过
+- 分区缺失但日历不可核实 → 待核验, 不自动修复
 
-检测成本: 每分区只读 parquet 元数据 statistics (不解压数据页), 实测 ~0.5ms/分区。
+本地检查优先读取 parquet 元数据; 有疑似尾部缺口时按数据源批量查询交易日历。
 """
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ TABLE_FAMILY = {
 class IntegrityIssue:
     day: date
     table: str
-    kind: str  # "snapshot"=盘中快照 | "missing"=分区缺失
+    kind: str  # snapshot=盘中快照 | missing=确认缺失 | calendar_unknown=日历待核验
 
 
 def _quote_ts_max_ms(part_dir: Path) -> int | None:
@@ -166,7 +166,7 @@ def _partition_is_snapshot(day: date, part_dir: Path, quote_ts_max_ms: int | Non
 
 
 def _candidate_days(today: date, lookback_days: int) -> list[date]:
-    """最近 lookback_days 自然日内、严格早于今天的工作日 (节假日近似, 误报无害)。"""
+    """最近 lookback_days 自然日内的工作日候选; 缺失时还需核实交易日历。"""
     days: list[date] = []
     for offset in range(1, lookback_days + 1):
         d = today - timedelta(days=offset)
@@ -181,7 +181,7 @@ def scan_recent_integrity(
     today: date | None = None,
     lookback_days: int = SCAN_WINDOW_DAYS,
 ) -> list[IntegrityIssue]:
-    """扫描最近交易日的数据完整性, 返回坏分区列表 (按日期升序)。
+    """扫描最近交易日的数据完整性, 返回确认问题及日历待核验项 (按日期升序)。
 
     每族表独立判定; 族内"最近无任何活动"(最新分区早于窗口)时整族跳过 —
     覆盖首次启动(无数据)与长期停用(用户自主)两类不应自动修复的场景。
@@ -190,6 +190,7 @@ def scan_recent_integrity(
     today = today or datetime.now(CN_TZ).date()
     window_start = today - timedelta(days=lookback_days)
     issues: list[IntegrityIssue] = []
+    missing_candidates: list[tuple[date, str]] = []
 
     for table in _DAILY_TABLES:
         base = data_dir / table
@@ -210,12 +211,22 @@ def scan_recent_integrity(
                 # 只报"尾部缺口": 晚于本地最新分区的缺失日。
                 # 历史内部空洞是另一类问题(laggards), 已有独立告警, 不在此扩面。
                 if day > latest:
-                    issues.append(IntegrityIssue(day=day, table=table, kind="missing"))
+                    missing_candidates.append((day, table))
                 continue
             part_dir = base / f"date={day.isoformat()}"
             quote_ts = _quote_ts_max_ms(part_dir)
             if _partition_is_snapshot(day, part_dir, quote_ts):
                 issues.append(IntegrityIssue(day=day, table=table, kind="snapshot"))
+
+    if missing_candidates:
+        from app.services.trading_day import historical_trading_day_status
+
+        verdicts = historical_trading_day_status({day for day, _ in missing_candidates})
+        for day, table in missing_candidates:
+            verdict = verdicts.get(day)
+            if verdict is not False:
+                kind = "missing" if verdict is True else "calendar_unknown"
+                issues.append(IntegrityIssue(day=day, table=table, kind=kind))
 
     issues.sort(key=lambda i: (i.day, i.table))
     return issues
@@ -225,10 +236,13 @@ def earliest_issue_day(
     issues: list[IntegrityIssue],
     tables: Iterable[str] | None = None,
 ) -> date | None:
-    """坏分区中最早的一天; tables 限定参与的表族 (None=全部)。"""
-    scoped = (
-        [i for i in issues if i.table in tables] if tables is not None else issues
-    )
+    """已确认坏分区中最早的一天; 日历未知不得作为自动修复起点。"""
+    selected_tables = set(tables) if tables is not None else None
+    scoped = [
+        i for i in issues
+        if i.kind in ("snapshot", "missing")
+        and (selected_tables is None or i.table in selected_tables)
+    ]
     return min((i.day for i in scoped), default=None)
 
 
@@ -273,11 +287,16 @@ def describe_issues(issues: list[IntegrityIssue]) -> str:
     """面向用户的一句话描述 (409 详情 / 日志用)。"""
     if not issues:
         return ""
-    days = sorted({i.day for i in issues})
-    day_text = "、".join(d.isoformat() for d in days)
-    kinds = {i.kind for i in issues}
-    reason = "停机前的盘中快照" if "snapshot" in kinds else "缺失"
-    return f"{day_text} 的数据为{reason}"
+    parts = []
+    for kind, reason in (
+        ("snapshot", "的数据为停机前的盘中快照"),
+        ("missing", "的数据为缺失"),
+        ("calendar_unknown", "的交易日历暂无法核验"),
+    ):
+        days = sorted({i.day for i in issues if i.kind == kind})
+        if days:
+            parts.append("、".join(d.isoformat() for d in days) + " " + reason)
+    return "; ".join(parts)
 
 
 def launch_integrity_repair(app_state, start_date: date, reason: str) -> tuple[str | None, bool]:
@@ -388,10 +407,12 @@ def boot_integrity_check(app_state) -> None:
         logger.warning("boot integrity scan failed: %s", e)
         return
     if not issues:
-        logger.info("boot integrity check: 近 %d 个交易日数据完整", SCAN_WINDOW_DAYS)
+        logger.info("boot integrity check: 近 %d 个自然日内未发现历史尾部缺口或盘中快照", SCAN_WINDOW_DAYS)
         return
     earliest = earliest_issue_day(issues)
-    logger.warning("boot integrity check: %s (共 %d 个坏分区)", describe_issues(issues), len(issues))
+    logger.warning("boot integrity check: %s", describe_issues(issues))
+    if earliest is None:
+        return
     if not within_auto_repair_window(earliest):
         logger.warning(
             "integrity: 最早坏日 %s 超出自动修复窗口(%d 天), 请在数据页手动执行数据修正",

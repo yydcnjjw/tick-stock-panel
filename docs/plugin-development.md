@@ -194,11 +194,24 @@ class MyProvider:
     def get_instruments(self, asset_type="stock") -> list[dict]:
         """(可选)标的维表: 返回 tickflow Instrument 形状的行, 供 instrument_sync 复用 flatten"""
 
+    def trading_days(self) -> set[date]:
+        """(可选辅助协议) A 股交易日历, 返回北京时间日期集合。
+        必须包含最早与最晚日期之间的全部交易日, 不得静默丢弃非法日期行。
+        失败抛异常或返回空集合; 不用本地行情分区反推交易日。"""
+
     def test_dataset(self, dataset: str, symbols=None) -> dict:
         """(强烈建议)设置页"试拉"按钮。
         返回 {provider, dataset, rows, columns, preview, error?}; 未支持的数据集
         返回 error 字段说明会回退 TickFlow。"""
 ```
+
+历史完整性检查通过已加载 provider 的可选 `trading_days()` 批量核实疑似尾部缺口。
+这是已有交易日探针的辅助协议，不新增独立路由偏好。只有日期处于日历最早和最晚
+交易日之间时，集合内判为交易日、集合外判为休市；覆盖区间外、空响应、异常、
+非法日期或多源结论冲突均为待核验。获取日历的时间不代表它已覆盖到该日。
+每轮有疑似缺口的扫描重新读取日历，不将失败缓存成休市，也不使用当前行情戳判断
+历史休市日。待核验日期阻止开启实时行情，但不据此创建自动修复任务；真实交易日
+缺口及已有分区中的盘中快照仍按原有规则修复。
 
 `get_depth_batch` 返回结构如下。价格和数量数组均按一档到五档排列;数量单位为“手”,
 `timestamp` 为毫秒 Unix 时间戳。服务层按 capability 的 `batch` / `rpm` 统一分片限速,

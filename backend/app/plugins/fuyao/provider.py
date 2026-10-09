@@ -984,11 +984,14 @@ class FuyaoProvider:
     def trading_days(self) -> set:
         """近一年交易日集合 (供交易日探针)。失败抛 FuyaoError, 由探针兜为未知。"""
         rows = self._get_client().trading_days()
-        return {
-            d
-            for d in (_date_of_ms(r.get("date_ms")) for r in rows)
-            if d is not None
-        }
+        days = set()
+        for row in rows:
+            day = _date_of_ms(row.get("date_ms")) if isinstance(row, dict) else None
+            if day is None:
+                # 丢弃非法行会把真实交易日变成日历内部的假休市日。
+                raise FuyaoError("交易日历包含无法解析的日期")
+            days.add(day)
+        return days
 
     def dragon_tiger(self, board_type: str = "all", date: str | None = None) -> dict:
         """龙虎榜单榜 (复盘页卡片 + AI 复盘上下文)。返回原始 data 容器。
