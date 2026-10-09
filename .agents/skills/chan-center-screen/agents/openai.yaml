@@ -1,0 +1,4 @@
+interface:
+  display_name: "中枢震荡选股"
+  short_description: "筛选日线近期宽中枢与区间震荡观察股，按请求维护中枢震荡分组"
+  default_prompt: "使用 $chan-center-screen 筛选最新完整收盘的日线中枢震荡观察股，列出完整名单、区间宽度、价格位置和确认状态。"
