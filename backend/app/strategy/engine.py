@@ -906,6 +906,8 @@ class StrategyEngine:
         t0 = time.perf_counter()
 
         s = self.get(strategy_id)
+        if s.meta.get("backtest_only"):
+            raise ValueError(s.meta.get("live_block_reason", "该策略仅支持回测"))
         if reason := chan_signals.retirement_reason(s, overrides):
             raise ValueError(reason)
         self.validate_context(s, context)
@@ -1184,10 +1186,13 @@ class StrategyEngine:
         params_map = params_map or {}
         overrides_map = overrides_map or {}
         selected_ids = ([sid for sid, spec in self._strategies.items()
-                         if not chan_signals.retirement_reason(spec, overrides_map.get(sid))]
+                         if not spec.meta.get("backtest_only")
+                         and not chan_signals.retirement_reason(spec, overrides_map.get(sid))]
                         if strategy_ids is None else strategy_ids)
         selected = [(sid, self.get(sid)) for sid in selected_ids]
         for _, strategy in selected:
+            if strategy.meta.get("backtest_only"):
+                raise ValueError(strategy.meta.get("live_block_reason", "该策略仅支持回测"))
             self.validate_context(strategy, context)
 
         history_strats = [

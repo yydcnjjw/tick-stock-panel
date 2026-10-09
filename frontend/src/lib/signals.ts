@@ -240,6 +240,13 @@ const FIELD_LABELS: Record<string, string> = {
  */
 export function cnSignal(name: string, customNames?: Record<string, string>): string {
   if (customNames && name in customNames) return customNames[name]
+  const centerNames: Record<string, string> = {
+    center_lower_stop: '中枢下沿止损',
+    center_l24_divergence_buy: '盘整背驰辅助入场',
+    center_l24_risk_stop: 'C段低点止损',
+    center_l24_failed_rebound: '首次反弹未回中枢',
+  }
+  if (name in centerNames) return centerNames[name]
   const match = name.match(/^signal_chan_seg_(1p?|2s?|3[ab])_(buy|sell)$/)
   if (match) return `chan.py 线段级${CHAN_BSP_LABELS[match[1]]}${match[2] === 'buy' ? '买' : '卖'}确认`
   return SIGNAL_LABELS[normalizeStructureSignalId(name)] ?? FIELD_LABELS[name] ?? name

@@ -715,6 +715,7 @@ def run_all(request: Request, body: Optional[dict] = None):
             meta["id"]
             for meta in engine.list_strategies()
             if not meta.get("research_only")
+            and not meta.get("backtest_only")
             and meta.get("execution_available", True)
             and asset_type in meta.get("asset_types", ["stock"])
             and timeframe in meta.get("timeframes", ["1d"])

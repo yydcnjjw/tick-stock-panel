@@ -388,6 +388,7 @@ function ExitReasonBadge({ reason, signalId, signalNames }: { reason: string; si
   const config: Record<string, { label: string; cls: string }> = {
     signal: { label: '信号', cls: 'bg-accent/10 text-accent border-accent/30' },
     stop_loss: { label: '止损', cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
+    center_stop: { label: '中枢止损', cls: 'bg-red-500/10 text-red-400 border-red-500/30' },
     take_profit: { label: '止盈', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
     trailing_stop: { label: '移损', cls: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
     trailing_take_profit: { label: '回撤止盈', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
@@ -397,7 +398,7 @@ function ExitReasonBadge({ reason, signalId, signalNames }: { reason: string; si
   }
   const c = config[reason] ?? { label: reason, cls: 'bg-elevated text-muted border-border' }
   // 信号类退出且能解析出具体信号名时, 显示具体信号而非笼统的"信号"
-  const specific = reason === 'signal' && signalId ? cnSignal(signalId, signalNames) : null
+  const specific = (reason === 'signal' || reason === 'center_stop') && signalId ? cnSignal(signalId, signalNames) : null
   return (
     <span className={`text-[10px] px-1.5 py-0.5 rounded border ${c.cls} ${specific ? 'max-w-[7rem] truncate' : ''}`} title={specific ?? c.label}>
       {specific ?? c.label}
@@ -1287,7 +1288,14 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     lines.push(`策略名称,${name}`)
     if (result.strategy_info?.id) lines.push(`策略ID,${result.strategy_info.id}`)
     lines.push(`回测区间,${start} ~ ${end}`)
+    if (s.research_scope?.warning) {
+      lines.push(`研究口径,"${String(s.research_scope.warning).replace(/"/g, '""')}"`)
+    }
     lines.push(`净值曲线天数,${result.equity_curve?.length ?? 0}`)
+    if (s.center_rules?.rule_set) lines.push(`中枢规则方案,${s.center_rules.rule_set}`)
+    if (s.center_rules?.risk_sizing) {
+      lines.push(`计划风险预算,每笔权益${Number(s.center_rules.risk_fraction ?? .01) * 100}%（含双边成本）；实际损失可能超出`)
+    }
     lines.push(`完成交易数,${result.trades?.length ?? 0}`)
     lines.push(`总收益,${pct(strategyReturn)}`)
     lines.push(`年化收益,${pct(s.annual_return)}`)
@@ -1311,11 +1319,12 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
     }
 
     lines.push('', '# 交易明细',
-      'symbol,name,entry_date,entry_price,exit_date,exit_price,pnl_pct,duration,exit_reason,shares,entry_value,exit_value,pnl_amount')
+      'symbol,name,entry_date,entry_price,exit_date,exit_price,pnl_pct,duration,exit_reason,shares,entry_value,exit_value,pnl_amount,exit_signal_id,center_reference')
     for (const t of result.trades ?? []) {
       lines.push([t.symbol, t.name ?? '', t.entry_date, num(t.entry_price), t.exit_date,
         num(t.exit_price), num(t.pnl_pct), num(t.duration), t.exit_reason ?? '',
-        num(t.shares), num(t.entry_value), num(t.exit_value), num(t.pnl_amount)].map(csvEsc).join(','))
+        num(t.shares), num(t.entry_value), num(t.exit_value), num(t.pnl_amount),
+        t.exit_signal_id ?? '', t.center_reference ? JSON.stringify(t.center_reference) : ''].map(csvEsc).join(','))
     }
 
     lines.push('', '# 分标的统计', 'symbol,n_trades,total_return,win_rate,best,worst')
@@ -1478,7 +1487,19 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   const hasCzscExit = effectiveExitSignals.some(isStructureSignal)
   const hasCzsc = hasCzscEntry || hasCzscExit
   const czscFillMismatch = (hasCzscEntry && entryFill !== 'open_t+1') || (hasCzscExit && exitFill !== 'open_t+1')
+  const exploratoryParam = detail?.backtest_exploratory_param
+  const centerRuleDetails = selectedStrategy === 'chan_center_range'
+    ? detail?.params.find(p => p.id === 'rule_set')?.option_details?.[String(strategyParams.rule_set ?? '原版')]
+    : undefined
+  const centerRiskSizing = selectedStrategy === 'chan_center_range'
+    && (centerRuleDetails?.risk_sizing ?? ['完整新版', '仅风险定仓'].includes(String(strategyParams.rule_set ?? '原版')))
+  const centerRiskPercent = Number(centerRuleDetails?.risk_fraction ?? .01) * 100
+  const centerPositionCap = Number(centerRuleDetails?.position_cap ?? .5) * 100
+  const exploratoryValue = exploratoryParam ? strategyParams[exploratoryParam] : false
+  const exploratoryEnabled = exploratoryValue === true
+    || (typeof exploratoryValue === 'string' && exploratoryValue.toLowerCase() === 'true')
   const czscRunErrors = [
+    !exploratoryEnabled ? detail?.backtest_block_reason : null,
     detail?.execution_available === false ? detail.execution_unavailable_reason : null,
     ...(hasCzsc ? [
     assetType !== 'stock' ? 'chan.py 仅支持 A 股股票，不支持 ETF' : null,
@@ -1538,7 +1559,7 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
         ? `评分 ≤${scoreMaxValue}`
         : '评分不过滤'
   const advancedSummary = detail
-    ? [
+    ? detail.backtest_only ? `${detail.id === 'chan_center_range' ? `当前方案：${strategyParams.rule_set ?? '原版'} · ` : ''}${centerRuleDetails?.description ?? detail.description}` : [
         detail.params.length > 0 ? `参数 ${detail.params.length}` : '无策略参数',
         basicFilter.enabled !== false ? '过滤开' : '过滤关',
         `买点 ${entrySignals.length}`,
@@ -1588,6 +1609,11 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
   const executionSummary = [
     ['buy_no_slot', '满仓未买'],
     ['buy_exposure', '仓位上限'],
+    ['buy_center_lower', '成交价未高于下沿'],
+    ['buy_center_position', '区间位置超限'],
+    ['buy_center_distance', '下沿风险超限'],
+    ['buy_center_risk', '计划风险无效'],
+    ['buy_lot_size', '不足一手'],
     ['buy_score_filter', '评分过滤'],
     ['buy_limit_up', '涨停未买'],
     ['buy_suspended', '停牌未买'],
@@ -1908,10 +1934,12 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">买入权重</label>
-            <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
+            {centerRiskSizing ? <div className={`${INPUT_CLS} text-xs leading-5`}>
+              按风险定仓：每笔计划风险 {centerRiskPercent}%，每只最多 {centerPositionCap}%；余款留现金。
+            </div> : <select value={positionSizing} onChange={e => setPositionSizing(e.target.value as any)} className={INPUT_CLS}>
               <option value="equal">等权买入</option>
               <option value="score_weight">评分加权</option>
-            </select>
+            </select>}
           </div>
           <div>
             <label className="text-xs font-medium text-secondary block mb-1.5">最大持仓数</label>
@@ -1943,7 +1971,9 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
         )}
         {simMode === 'position' && (
         <div className="text-[10px] leading-4 text-muted">
-          单票目标约 {Number.isFinite(targetPositionPct) ? targetPositionPct.toFixed(1) : '—'}%。最大总仓位控制资金投入；剩余现金不是新增持仓名额，只有实际卖出成功才释放持仓数。
+          {centerRiskSizing
+            ? `单票资金上限约 ${Number.isFinite(targetPositionPct) ? Math.min(centerPositionCap, targetPositionPct).toFixed(1) : '—'}%；实际仓位按到${centerRuleDetails?.risk_reference === 'c_low' ? '冻结C段低点' : '下沿'}的风险距离计算，余款留现金。`
+            : `单票目标约 ${Number.isFinite(targetPositionPct) ? targetPositionPct.toFixed(1) : '—'}%。最大总仓位控制资金投入；剩余现金不是新增持仓名额，只有实际卖出成功才释放持仓数。`}
         </div>
         )}
         {simMode === 'full' && (
@@ -1959,11 +1989,19 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
           </div>
         )}
 
-        {(hasCzsc || detail?.execution_available === false) && (
+        {(hasCzsc || detail?.execution_available === false || detail?.backtest_block_reason) && (
           <div className={`rounded-btn border px-3 py-2 text-[11px] leading-5 ${czscRunErrors.length ? 'border-warning/30 bg-warning/10 text-warning' : 'border-border text-muted'}`} role="status">
             <p>chan.py 使用已收盘日线，引用侧最早次交易日开盘成交。</p>
             {hasCzscCodeDependency && <p>策略代码依赖 chan.py，移除界面触发器不会解除依赖；入场侧仍须次交易日开盘成交。</p>}
             {czscRunErrors.map(reason => <p key={reason}>{reason}</p>)}
+            {exploratoryParam && (
+              <label className="mt-2 flex items-start gap-2 text-foreground">
+                <input type="checkbox" className="mt-1" checked={exploratoryEnabled}
+                  onChange={event => setStrategyParams(prev => ({ ...prev, [exploratoryParam]: event.target.checked }))} />
+                <span>启用探索性回测（历史资格未核验）</span>
+              </label>
+            )}
+            {exploratoryEnabled && <p className="mt-1 text-warning">{detail?.backtest_exploratory_warning}</p>}
             {czscFillMismatch && (
               <button type="button" className="mt-1 underline" onClick={() => {
                 if (hasCzscEntry) setEntryFill('open_t+1')
@@ -2190,6 +2228,19 @@ export function StrategyBacktest({ loadCandidate, onLoadConsumed }: {
               </div>
             )}
           </motion.div>
+        )}
+
+        {result?.stats?.research_scope?.warning && (
+          <div className="rounded-btn border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning" role="status">
+            {result.stats.research_scope.warning}
+          </div>
+        )}
+
+        {result?.stats?.center_rules && (
+          <div className="rounded-btn border border-border px-3 py-2 text-xs leading-5 text-secondary">
+            中枢规则方案：{result.stats.center_rules.rule_set}
+            {result.stats.center_rules.risk_sizing && `；每笔计划风险为建仓权益的 ${Number(result.stats.center_rules.risk_fraction ?? .01) * 100}%（含双边成本），实际损失可能因破位穿透或隔夜变化超出。`}
+          </div>
         )}
 
         {/* 旧全量模拟结果: 固定前瞻收益统计 (兼容历史缓存结果) */}

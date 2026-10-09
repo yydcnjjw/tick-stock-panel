@@ -26,6 +26,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pads
 
+from app.backtest.chan_center import CenterFeatures
 from app.backtest.minute_trigger import build_minute_exit_reference
 from app.backtest.numba_runtime import run_numba_parallel
 from app.price_limits import (
@@ -508,6 +509,7 @@ class SignalMatrix:
     exit_signal_code: np.ndarray
     entry_signal_ids: tuple[str, ...] = ()
     exit_signal_ids: tuple[str, ...] = ()
+    center_features: CenterFeatures | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -515,7 +517,7 @@ class SignalMatrix:
 
     @property
     def nbytes(self) -> int:
-        return int(sum(
+        return (self.center_features.nbytes if self.center_features is not None else 0) + int(sum(
             value.nbytes
             for value in self.__dict__.values()
             if isinstance(value, np.ndarray)
@@ -554,6 +556,7 @@ class MarketMatrix:
     # 逐格入场价覆盖 (time x asset, NaN=回退 open/close 惯例)。分钟策略回测用:
     # 信号在盘中第 m 根触发, 入场价 = 触发分钟收盘价, 而非当日开盘/收盘。
     entry_price: np.ndarray | None = None
+    center_features: CenterFeatures | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -561,7 +564,7 @@ class MarketMatrix:
 
     @property
     def nbytes(self) -> int:
-        return int(sum(
+        return (self.center_features.nbytes if self.center_features is not None else 0) + int(sum(
             value.nbytes
             for value in self.__dict__.values()
             if isinstance(value, np.ndarray)
@@ -2241,6 +2244,7 @@ def make_signal_matrix(
     exit_signal_code: np.ndarray | None = None,
     entry_signal_ids: tuple[str, ...] = (),
     exit_signal_ids: tuple[str, ...] = (),
+    center_features: CenterFeatures | None = None,
 ) -> SignalMatrix:
     """Create a compact read-only signal matrix with canonical dtypes."""
     entry_array = _coerce_array(entry, shape, np.uint8, 0)
@@ -2256,6 +2260,7 @@ def make_signal_matrix(
         exit_codes,
         entry_signal_ids=entry_signal_ids,
         exit_signal_ids=exit_signal_ids,
+        center_features=center_features,
     )
 
 
@@ -2268,6 +2273,7 @@ def _finalize_signal_matrix(
     *,
     entry_signal_ids: tuple[str, ...] = (),
     exit_signal_ids: tuple[str, ...] = (),
+    center_features: CenterFeatures | None = None,
 ) -> SignalMatrix:
     shape = entry.shape
     _make_read_only(entry, exit_, score, entry_signal_code, exit_signal_code)
@@ -2279,6 +2285,7 @@ def _finalize_signal_matrix(
         exit_signal_code=exit_signal_code,
         entry_signal_ids=tuple(entry_signal_ids),
         exit_signal_ids=tuple(exit_signal_ids),
+        center_features=center_features.readonly() if center_features is not None else None,
     )
     validate_signal_matrix(result, shape)
     return result
@@ -2306,6 +2313,8 @@ def validate_signal_matrix(signals: SignalMatrix, shape: tuple[int, int]) -> Non
             raise ValueError(f"SignalMatrix.{name} must be read-only")
     if not np.isfinite(signals.score).all():
         raise ValueError("SignalMatrix.score must contain only finite values")
+    if signals.center_features is not None:
+        signals.center_features.validate(shape)
 
 
 def build_market_matrix_from_signals(
@@ -2338,6 +2347,15 @@ def build_market_matrix_from_signals(
         present,
         exit_delay_bars,
     )
+    if signals.center_features is not None:
+        if entry_delay_bars != 1 or exit_delay_bars != 1 or minute_exit_trigger or entry_price_override is not None:
+            raise ValueError("中枢震荡只支持次市场交易日开盘成交")
+        # The old delay intentionally follows each symbol's next available row.
+        # This strategy expires on the next market row, including a missing bar.
+        expired = (entry != 0) & (entry_signal_time != np.arange(market.shape[0])[:, None] - 1)
+        entry[expired] = 0
+        entry_signal_time[expired] = -1
+        entry_signal_code[expired] = -1
 
     if reference_price is not None:
         if reference_price.shape != market.shape:
@@ -2401,6 +2419,7 @@ def build_market_matrix_from_signals(
             if entry_price_override is not None
             else None
         ),
+        center_features=signals.center_features,
     )
 
 
@@ -2510,6 +2529,7 @@ def slice_signal_matrix(signals: SignalMatrix, start: int, stop: int) -> SignalM
         signals.exit_signal_code[start:stop],
         entry_signal_ids=signals.entry_signal_ids,
         exit_signal_ids=signals.exit_signal_ids,
+        center_features=signals.center_features.slice(start, stop) if signals.center_features is not None else None,
     )
 
 
@@ -3571,6 +3591,7 @@ class MatrixStrategyPipeline:
             exit_signal_code=exit_codes,
             entry_signal_ids=signals.entry_signal_ids,
             exit_signal_ids=signals.exit_signal_ids,
+            center_features=signals.center_features,
         )
 
 
@@ -4195,6 +4216,7 @@ def apply_time_masks(
         exit_codes,
         entry_signal_ids=signals.entry_signal_ids,
         exit_signal_ids=signals.exit_signal_ids,
+        center_features=signals.center_features,
     )
 
 

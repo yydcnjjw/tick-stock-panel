@@ -19,6 +19,7 @@ from typing import Literal
 import numpy as np
 import polars as pl
 
+from app.backtest.chan_center import CenterPolicy
 from app.backtest.engine import BacktestEngine, MatcherConfig, SimResult, SimulationOptions
 from app.backtest.fundamentals import FUNDAMENTAL_FACTOR_NAMES
 from app.backtest.matrix import (
@@ -329,6 +330,8 @@ def build_matrix_cache_profile(
         else ()
     )
     for strategy in definitions:
+        if strategy.meta.get("backtest_block_reason"):
+            continue
         if strategy.execution_backend != "matrix_native":
             continue
         if asset_type not in strategy.meta.get("asset_types", ["stock"]):
@@ -648,6 +651,9 @@ class BacktestResultPolicy:
         diagnostic = {
             "error",
             "czsc_coverage",
+            "research_scope",
+            "center_rules",
+            "open_position_details",
             "timing_ms",
             "execution",
             "selection",
@@ -792,6 +798,8 @@ class StrategyBacktestService:
         resolved_children: list[tuple[StrategyDef, dict, dict]] = []
         for child in children:
             child_def = self.strategy_engine.get(child.strategy_id)
+            if child_def.meta.get("backtest_only"):
+                raise ValueError("持仓状态策略不支持叠加回测")
             if child_def.execution_backend != "matrix_native":
                 raise ValueError(
                     f"叠加回测暂仅支持矩阵子策略; {child.strategy_id!r} "
@@ -907,6 +915,8 @@ class StrategyBacktestService:
 
         first = configs[0]
         strategy = self.strategy_engine.get(first.strategy_id)
+        if strategy.meta.get("backtest_block_reason"):
+            raise ValueError(str(strategy.meta["backtest_block_reason"]))
         if strategy.execution_backend != "matrix_native":
             raise ValueError("shared MarketDataMatrix preparation requires matrix_native strategy")
         StrategyEngine.validate_context(
@@ -1078,13 +1088,17 @@ class StrategyBacktestService:
         # 因子归因快照容器: 日线路径在 _apply_score 里填充, 其余路径保持空
         factor_snapshot: dict = {}
         czsc_diagnostics: dict = {}
+        research_scope: dict = {}
 
         def _err(msg: str) -> StrategyBacktestResult:
             return StrategyBacktestResult(
                 run_id=run_id,
                 config=self._config_to_dict(config),
                 error=msg,
-                stats={"czsc_coverage": czsc_diagnostics} if czsc_diagnostics else {},
+                stats={
+                    **({"czsc_coverage": czsc_diagnostics} if czsc_diagnostics else {}),
+                    **({"research_scope": research_scope} if research_scope else {}),
+                },
                 elapsed_ms=(time.perf_counter() - t0) * 1000,
             )
 
@@ -1103,11 +1117,33 @@ class StrategyBacktestService:
             return _err(str(e))
 
         params = self._normalize_params(config.params or {}, s)
+        exploratory_param = s.meta.get("backtest_exploratory_param")
+        exploratory = bool(exploratory_param) and params.get(exploratory_param) is True
+        # Explicit sample research may proceed without claiming historical eligibility.
+        if s.meta.get("backtest_block_reason") and not exploratory:
+            return _err(str(s.meta["backtest_block_reason"]))
+        center_policy = None
+        if config.strategy_id == "chan_center_range":
+            center_policy = CenterPolicy.for_rule_set(params["rule_set"])
+            # Save the effective choice, including the legacy missing-field fallback.
+            config = replace(config, params=params)
+        if exploratory:
+            research_scope = {
+                "mode": "exploratory",
+                "warning": s.meta["backtest_exploratory_warning"],
+                "universe": "available_historical_mainboard_bars",
+                "historical_eligibility_verified": False,
+                "st_filter": "none",
+                "price_limits": "existing_engine_rules_with_current_names",
+            }
         overrides = config.overrides or {}
         # 同回测 run 路径: 挖掘运行期也要按资产类型中和股票专属过滤键 (#215)
         basic_filter = _basic_filter_for_asset(
             self._effective_basic_filter(s, overrides), config.asset_type
         )
+        if research_scope and basic_filter.get("enabled", True) and basic_filter.get("exclude_st"):
+            research_scope["st_filter"] = "current_name"
+            research_scope["warning"] += " 本次额外启用了当前名称过滤, 不能解释为历史 ST 资格筛选。"
         entry_signals = self._effective_signals(overrides, "entry_signals", s.entry_signals)
         exit_signals = self._effective_signals(overrides, "exit_signals", s.exit_signals)
         try:
@@ -1363,6 +1399,7 @@ class StrategyBacktestService:
             initial_capital=config.initial_capital,
             position_sizing=config.position_sizing,
             minute_fill=config.minute_fill,
+            center_policy=center_policy,
         )
         t_signal = time.perf_counter()
         selection_stats: dict[str, int | bool]
@@ -1555,6 +1592,23 @@ class StrategyBacktestService:
                 entry_time_mask[start_id:stop_id],
                 exit_time_mask[start_id:stop_id],
             )
+            if research_scope and sim_signal_matrix.center_features is not None:
+                observations = sim_signal_matrix.center_features.values
+                mainboard = np.array([
+                    (symbol.startswith("60") and symbol.endswith(".SH"))
+                    or (symbol.startswith("00") and symbol.endswith(".SZ"))
+                    for symbol in sim_market_data.symbols
+                ])
+                research_scope.update({
+                    "loaded_from": market_data.timestamp_labels[0],
+                    "loaded_through": market_data.timestamp_labels[-1],
+                    "market_days": sim_market_data.shape[0],
+                    "mainboard_symbols_in_loaded_history": int(mainboard.sum()),
+                    "symbols_with_valid_bars": int(observations["valid"].any(axis=0).sum()),
+                    "valid_symbol_days": int(observations["valid"].sum()),
+                    "missing_or_invalid_symbol_days": int((~observations["valid"][:, mainboard]).sum()),
+                    "center_eligible_symbol_days": int(observations["eligible"].sum()),
+                })
             timing_ms["signals_score"] = round((time.perf_counter() - t_signal) * 1000, 1)
             if not sim_signal_matrix.entry.any():
                 return _err("在指定区间内未产生买入信号")
@@ -1702,6 +1756,10 @@ class StrategyBacktestService:
         result.stats["full_feature_fallback"] = feature_plan.full_feature_fallback
         result.stats["execution_backend"] = s.execution_backend
         result.stats["selection"] = selection_stats
+        if research_scope:
+            result.stats["research_scope"] = research_scope
+        if center_policy is not None:
+            result.stats["center_rules"] = center_policy.snapshot()
         if czsc_diagnostics:
             result.stats["czsc_coverage"] = czsc_diagnostics
         result.stats["shared_market_data"] = prepared is not None
@@ -2470,6 +2528,10 @@ class StrategyBacktestService:
     @staticmethod
     def _normalize_params(params: dict, s: StrategyDef) -> dict:
         normalized = dict(params)
+        if s.meta.get("id") == "chan_center_range":
+            # Saved v1 requests predate this parameter. New UI requests explicitly
+            # send the META default (v2); historical requests keep their old rules.
+            normalized.setdefault("rule_set", "原版")
         for param in s.meta.get("params", []):
             pid = param.get("id")
             if not pid:
@@ -2523,6 +2585,7 @@ class StrategyBacktestService:
             "blocked_exit_days": getattr(t, "blocked_exit_days", 0),
             "entry_signal_id": getattr(t, "entry_signal_id", None),
             "exit_signal_id": getattr(t, "exit_signal_id", None),
+            "center_reference": getattr(t, "center_reference", None),
         }
 
     @staticmethod

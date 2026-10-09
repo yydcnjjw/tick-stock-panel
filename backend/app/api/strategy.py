@@ -193,6 +193,10 @@ def _strategy_detail(
         "tags": s.meta.get("tags", []),
         "source": s.source,
         "research_only": s.meta.get("research_only", False),
+        "backtest_only": s.meta.get("backtest_only", False),
+        "backtest_block_reason": s.meta.get("backtest_block_reason"),
+        "backtest_exploratory_param": s.meta.get("backtest_exploratory_param"),
+        "backtest_exploratory_warning": s.meta.get("backtest_exploratory_warning"),
         "execution_backend": s.execution_backend,
         "execution_available": execution_reason is None,
         "execution_unavailable_reason": execution_reason,
@@ -427,6 +431,7 @@ def run_all(req: RunAllRequest, request: Request):
         meta["id"]
         for meta in engine.list_strategies()
         if not meta.get("research_only")
+        and not meta.get("backtest_only")
         and meta.get("execution_available", True)
         and retirement_reason(engine.get(meta["id"]), all_overrides.get(meta["id"])) is None
         and req.asset_type in meta.get("asset_types", ["stock"])

@@ -320,7 +320,7 @@ def test_builtin_matrix_strategies_use_their_declared_formula_modules():
     )
 
     # 分钟形态策略 (minute_red_streak) 已迁至自定义策略目录, 内置策略全部 matrix 后端
-    assert len(strategy_files) == 26
+    assert len(strategy_files) == 27
     for strategy_path in strategy_files:
         strategy = StrategyEngine._load_file(strategy_path)
         assert strategy.execution_backend == "matrix_native"
@@ -788,6 +788,7 @@ def test_registered_builtin_matrix_strategies_share_one_cache_profile():
     strategies = tuple(
         s for s in engine.strategy_definitions()
         if s.execution_backend != "minute_filter"
+        and not s.meta.get("backtest_block_reason")
     )
 
     assert len(strategies) == 26

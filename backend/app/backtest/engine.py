@@ -18,6 +18,7 @@ import numpy as np
 import polars as pl
 import pyarrow as pa
 
+from app.backtest.chan_center import CenterBook, CenterPolicy, validate_center_execution
 from app.backtest.matrix import (
     MarketDataMatrix,
     MarketMatrix,
@@ -72,6 +73,7 @@ class MatcherConfig:
     # 分钟K精确成交: 开启后, 信号触发日的成交价用当日分钟K优化
     # (有参考线→穿越价, 无参考线→VWAP)。数据缺失时降级为日K口径。
     minute_fill: bool = False
+    center_policy: CenterPolicy | None = None
 
     def __post_init__(self) -> None:
         # 解析最终口径: 优先 entry_fill/exit_fill, 否则回退到 matching (向后兼容)。
@@ -120,6 +122,7 @@ class TradeRecord:
     # 仅当该腿由信号触发时填充, 止损/止盈/到期等非信号退出时 exit_signal_id 为 None。
     entry_signal_id: str | None = None
     exit_signal_id: str | None = None
+    center_reference: dict | None = None
 
 
 @dataclass
@@ -1182,6 +1185,8 @@ class BacktestEngine:
         options: SimulationOptions | None = None,
     ) -> SimResult:
         """Run independent-candidate simulation on a prebuilt MarketMatrix."""
+        if matrix.center_features is not None:
+            raise ValueError("中枢震荡依赖实际持仓状态, 仅支持仓位模式")
         return self._simulate_independent_matrix(
             matrix, raw_candidates, config, progress_cb, cancel_event, options,
         )
@@ -1753,6 +1758,8 @@ class BacktestEngine:
         options: SimulationOptions | None = None,
     ) -> SimResult:
         """Run the production Python matcher on a prebuilt MarketMatrix."""
+        if matrix.center_features is not None:
+            validate_center_execution(config)
         if not matrix.entry.any():
             return self._empty_result()
         return self._simulate_portfolio_matrix(matrix, config, progress_cb, cancel_event, options)
@@ -1767,6 +1774,10 @@ class BacktestEngine:
     ) -> SimResult:
         options = options or SimulationOptions()
         time_count, asset_count = matrix.shape
+        center_book = None
+        if matrix.center_features is not None:
+            validate_center_execution(config)
+            center_book = CenterBook(matrix.center_features, policy=config.center_policy or CenterPolicy())
         entry_prices = self._resolve_entry_prices(matrix, config)
         exit_prices = matrix.open if config.exit_fill == "open_t+1" else matrix.close
         buy_cost_pct = config.buy_cost_pct()
@@ -1880,6 +1891,8 @@ class BacktestEngine:
         def _can_buy(time_id: int, asset_id: int) -> tuple[bool, str]:
             if not matrix.tradable[time_id, asset_id]:
                 return False, "buy_suspended"
+            if center_book is not None and not _valid_price(matrix.volume[time_id, asset_id]):
+                return False, "buy_suspended"
             if not _valid_price(entry_prices[time_id, asset_id]):
                 return False, "buy_invalid_price"
             if _one_price_limit(time_id, asset_id, "up"):
@@ -1888,6 +1901,8 @@ class BacktestEngine:
 
         def _can_sell(time_id: int, asset_id: int, override: float | None = None) -> tuple[bool, str]:
             if not matrix.tradable[time_id, asset_id]:
+                return False, "sell_suspended"
+            if center_book is not None and not _valid_price(matrix.volume[time_id, asset_id]):
                 return False, "sell_suspended"
             price = override if override is not None else exit_prices[time_id, asset_id]
             if not _valid_price(price):
@@ -1955,8 +1970,11 @@ class BacktestEngine:
                 exit_signal_id=(
                     pos.get("pending_exit_signal_id")
                     or _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
-                ) if reason == "signal" else None,
+                ) if reason == "signal" or (center_book is not None and reason == "center_stop") else None,
+                center_reference=pos.get("center_reference"),
             ))
+            if center_book is not None:
+                center_book.on_exit(asset_id, matrix.center_features.days[time_id])
 
         def _try_sell(
             time_id: int,
@@ -1967,8 +1985,9 @@ class BacktestEngine:
             override: float | None = None,
         ) -> bool:
             signal_id = (
-                _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
-                if reason == "signal" else None
+                positions[asset_id].get("pending_exit_signal_id")
+                or _signal_id(int(matrix.exit_signal_code[time_id, asset_id]), matrix.exit_signal_ids)
+                if reason == "signal" or (center_book is not None and reason == "center_stop") else None
             )
             minute_trigger = config.exit_fill == "signal_next_minute" and reason == "signal"
             if minute_trigger and override is None:
@@ -1997,6 +2016,11 @@ class BacktestEngine:
 
         for time_id, date_label in enumerate(matrix.timestamp_labels):
             date_text = date_label[:10]
+            center_buys, center_sells = {}, {}
+            if center_book is not None and time_id > 0:
+                center_buys, center_sells = center_book.on_close(
+                    time_id - 1, matrix.close[time_id - 1], positions,
+                )
             if time_id % 20 == 0:
                 if cancel_event is not None and cancel_event.is_set():
                     logger.info("回测被用户取消 (第 %d/%d 天)", time_id, time_count)
@@ -2064,12 +2088,19 @@ class BacktestEngine:
                 if pos.get("pending_exit_reason"):
                     reason = str(pos["pending_exit_reason"])
                     signal_date = str(pos.get("pending_exit_signal_date") or date_text)
+                elif center_book is not None and asset_id in center_sells:
+                    order = center_sells[asset_id]
+                    reason = order.reason
+                    signal_date = matrix.timestamp_labels[time_id - 1][:10]
+                    pos["pending_exit_signal_id"] = order.signal_id
+                    if order.exit_evidence is not None:
+                        pos["center_reference"]["exit_evidence"] = order.exit_evidence
                 elif matrix.exit[time_id, asset_id]:
                     reason = "signal"
                     signal_date = _signal_date(int(matrix.exit_signal_time[time_id, asset_id]), date_text)
                 elif config.max_hold_days is not None and pos["hold_days"] >= config.max_hold_days:
                     reason = "max_hold"
-                elif time_id == time_count - 1:
+                elif time_id == time_count - 1 and center_book is None:
                     reason = "end"
                 if reason:
                     _try_sell(time_id, asset_id, reason, signal_date, sold_today)
@@ -2078,6 +2109,8 @@ class BacktestEngine:
                 candidates: list[tuple[int, float]] = []
                 for asset_id in np.flatnonzero(matrix.entry[time_id]):
                     asset = int(asset_id)
+                    if center_book is not None and asset not in center_buys:
+                        continue
                     if asset in positions:
                         continue
                     if asset in sold_today:
@@ -2087,7 +2120,16 @@ class BacktestEngine:
                     if not ok:
                         _count(blocked)
                         continue
+                    if center_book is not None:
+                        blocked = center_book.policy.reject_entry(
+                            center_buys[asset], float(entry_prices[time_id, asset]),
+                        )
+                        if blocked:
+                            _count(blocked)
+                            continue
                     score = _matrix_entry_score(matrix, time_id, asset)
+                    if center_book is not None and center_buys[asset].rank_score is not None:
+                        score = center_buys[asset].rank_score
                     if config.score_min is not None and score < config.score_min:
                         _count("buy_score_filter")
                         continue
@@ -2100,7 +2142,12 @@ class BacktestEngine:
                 if slots <= 0:
                     execution_stats["buy_no_slot"] += len(candidates)
                 elif candidates:
-                    selected = candidates[:slots]
+                    # Failed price/lot/risk checks must not consume a portfolio slot.
+                    scan_candidates = center_book is not None and (
+                        center_book.policy.entry_gate or center_book.policy.risk_sizing
+                    )
+                    selected = candidates if scan_candidates else candidates[:slots]
+                    allocation_slots = min(len(selected), slots)
                     market_value_before = _market_value()
                     equity_before = cash + market_value_before
                     target_value = equity_before * max_exposure_pct / max_positions
@@ -2108,12 +2155,17 @@ class BacktestEngine:
                     if equity_before <= 0 or exposure_capacity <= 0 or max_exposure_pct <= 0:
                         execution_stats["buy_exposure"] += len(selected)
                     else:
-                        weights = np.repeat(1 / len(selected), len(selected))
-                        if config.position_sizing == "score_weight":
+                        weights = np.repeat(1 / allocation_slots, len(selected))
+                        if config.position_sizing == "score_weight" and not (
+                            center_book is not None and center_book.policy.risk_sizing
+                        ):
                             raw_weights = np.array([max(item[1], 0.0) for item in selected])
-                            if raw_weights.sum() > 0:
-                                weights = raw_weights / raw_weights.sum()
-                        total_budget = min(cash, exposure_capacity, target_value * len(selected))
+                            # Reserve weights for the available slots; fallback candidates
+                            # cannot dilute the initial orders' score-based allocations.
+                            weight_sum = raw_weights[:allocation_slots].sum()
+                            if weight_sum > 0:
+                                weights = raw_weights / weight_sum
+                        total_budget = min(cash, exposure_capacity, target_value * allocation_slots)
                         for (asset_id, entry_score), weight in zip(selected, weights):
                             if len(positions) >= max_positions:
                                 _count("buy_no_slot")
@@ -2121,7 +2173,19 @@ class BacktestEngine:
                             market_value = _market_value()
                             equity = cash + market_value
                             capacity = equity * max_exposure_pct - market_value
+                            if center_book is not None and center_book.policy.risk_sizing:
+                                # Freeze the day's equity after sells. Newly bought assets
+                                # must not change a later order's risk allowance via stale marks.
+                                capacity = equity_before * max_exposure_pct - (
+                                    market_value_before + sum(
+                                        p["entry_value"] for p in positions.values()
+                                        if p["entry_date"] == date_text
+                                    )
+                                )
                             allocation = min(total_budget * float(weight), target_value, cash, capacity)
+                            if center_book is not None and center_book.policy.risk_sizing:
+                                allocation = min(target_value, equity_before * center_book.policy.position_cap,
+                                                 cash, capacity)
                             if allocation <= 0:
                                 _count("buy_exposure")
                                 continue
@@ -2129,6 +2193,27 @@ class BacktestEngine:
                                 time_id, asset_id, "buy", float(entry_prices[time_id, asset_id])
                             )
                             shares = np.floor(allocation / (entry_price * (1 + buy_cost_pct)) / 100) * 100
+                            risk_per_share = None
+                            sizing_risk = None
+                            if center_book is not None and center_book.policy.risk_sizing:
+                                risk_per_share = (entry_price * (1 + buy_cost_pct)
+                                                  - (center_buys[asset_id].risk_low or center_buys[asset_id].low)
+                                                  * (1 - sell_cost_pct))
+                                if not np.isfinite(risk_per_share) or risk_per_share <= 0:
+                                    _count("buy_center_risk")
+                                    continue
+                                sizing_risk = risk_per_share
+                                policy = center_book.policy
+                                if policy.risk_floor_pct or policy.atr_risk_multiple:
+                                    floor_distance = max(entry_price * policy.risk_floor_pct,
+                                                         center_buys[asset_id].atr * policy.atr_risk_multiple)
+                                    floor_loss = (floor_distance + entry_price * buy_cost_pct
+                                                  + max(0, entry_price - floor_distance) * sell_cost_pct)
+                                    sizing_risk = max(sizing_risk, floor_loss)
+                                risk_shares = np.floor(
+                                    equity_before * center_book.policy.risk_fraction / sizing_risk / 100
+                                ) * 100
+                                shares = min(shares, risk_shares)
                             entry_value = shares * entry_price * (1 + buy_cost_pct)
                             if shares <= 0:
                                 _count("buy_lot_size")
@@ -2162,6 +2247,28 @@ class BacktestEngine:
                                 "pending_exit_next_open": False,
                                 "blocked_exit_days": 0,
                             }
+                            if center_book is not None:
+                                order = center_buys[asset_id]
+                                center_book.on_fill(asset_id, order)
+                                positions[asset_id]["entry_signal_id"] = order.signal_id
+                                positions[asset_id]["center_reference"] = {
+                                    "low": order.low, "high": order.high,
+                                    "phase": "123" if order.signal_id.startswith("center_bsp_") else "range",
+                                }
+                                if order.evidence is not None:
+                                    positions[asset_id]["center_reference"].update({
+                                        "risk_low": order.risk_low,
+                                        "lesson24": dict(vars(order.evidence)),
+                                        "evidence_tier": "daily_pen_auxiliary",
+                                    })
+                                if risk_per_share is not None:
+                                    positions[asset_id]["center_reference"].update({
+                                        "entry_equity": equity_before,
+                                        "risk_budget_amount": equity_before * center_book.policy.risk_fraction,
+                                        "planned_risk_amount": shares * risk_per_share,
+                                    })
+                                    if center_book.policy.risk_floor_pct or center_book.policy.atr_risk_multiple:
+                                        positions[asset_id]["center_reference"]["sizing_risk_amount"] = shares * sizing_risk
 
             for asset_id, pos in positions.items():
                 high_price = float(matrix.high[time_id, asset_id])
@@ -2206,6 +2313,18 @@ class BacktestEngine:
         )
         stats["execution"] = execution_stats
         stats["pending_exit_positions"] = sum(1 for pos in positions.values() if pos.get("pending_exit_reason"))
+        if center_book is not None:
+            stats["open_positions"] = len(positions)
+            stats["end_policy"] = "mark_open_positions"
+            stats["center_rules"] = center_book.policy.snapshot()
+            stats["open_position_details"] = [
+                {"symbol": matrix.symbols[a], "name": matrix.names[a],
+                 **{key: pos[key] for key in (
+                     "entry_date", "entry_signal_date", "entry_signal_id", "entry_price",
+                     "entry_value", "shares", "position_pct", "center_reference",
+                 )}}
+                for a, pos in positions.items()
+            ]
         stats["market_matrix_shape"] = [time_count, asset_count]
         stats["market_matrix_bytes"] = matrix.nbytes
         return SimResult(
