@@ -75,7 +75,8 @@ def _fetch_instruments_via_provider() -> list[dict] | None:
 def sync_instruments(data_dir: Path) -> int:
     """全量同步标的维表 → data/instruments/instruments.parquet。
 
-    返回写入的行数。
+    交易所请求失败或为空时保留原表, 不将部分结果发布为全量快照。
+    返回写入的行数; 未写入时返回 0。
     """
     all_rows = _fetch_instruments_via_provider()
     if all_rows is None:
@@ -88,8 +89,12 @@ def sync_instruments(data_dir: Path) -> int:
                 if items:
                     all_rows.extend(_flatten_instruments(items))
                     logger.info("instruments %s: %d stocks", ex, len(items))
-            except Exception as e:
-                logger.warning("get_instruments(%s) failed: %s", ex, e)
+                else:
+                    logger.warning("get_instruments(%s) returned no stocks; keeping previous snapshot", ex)
+                    return 0
+            except Exception as e:  # noqa: BLE001
+                logger.warning("get_instruments(%s) failed; keeping previous snapshot: %s", ex, e)
+                return 0
 
     if not all_rows:
         return 0

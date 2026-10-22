@@ -257,12 +257,12 @@ def _dump_date_range(path: Path) -> tuple[date | None, date | None]:
     return row["dmin"][0], row["dmax"][0]
 
 
-def _map_snapshot_row(row: dict, fetched_ms: int | None, *, volume_to_hand: bool = True) -> dict | None:
+def _map_snapshot_row(row: dict, fetched_ms: int | None) -> dict | None:
     """扶摇快照行 → 内部 realtime record。字段缺失时按依赖推导, 不伪造数据。
 
     实测字段(2026-08): high_price / low_price / prev_price;
     官方文档示例: highest_price / lowest_price / prev_close_price。两者都取。
-    volume_to_hand: A 股快照 volume 为股 → 手; 指数快照无此口径, 直接透传。
+    股票与指数快照的 volume 均为股, 统一转手后才能合并到内部日K。
     """
     symbol = row.get("thscode")
     if not symbol:
@@ -291,7 +291,7 @@ def _map_snapshot_row(row: dict, fetched_ms: int | None, *, volume_to_hand: bool
         "open": _to_float(row.get("open_price")),
         "high": _to_float(_first(row, "high_price", "highest_price")),
         "low": _to_float(_first(row, "low_price", "lowest_price")),
-        "volume": math.floor(volume / 100.0) if (volume is not None and volume_to_hand) else volume,
+        "volume": math.floor(volume / 100.0) if volume is not None else None,
         "amount": _to_float(row.get("turnover")),
         "change_pct": change_pct,
         "change_amount": change_amount,
@@ -440,7 +440,7 @@ class FuyaoProvider:
         fetched_ms = server_ts or None
         records = []
         for row in rows:
-            rec = _map_snapshot_row(row, fetched_ms, volume_to_hand=False)
+            rec = _map_snapshot_row(row, fetched_ms)
             if rec is not None:
                 records.append(rec)
         logger.info("扶摇指数行情拉取完成: %d 条(请求 %d 只)", len(records), len(wanted))

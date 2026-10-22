@@ -293,21 +293,42 @@ def _index_provider_with(monkeypatch, **kwargs):
     return FuyaoProvider(), fake
 
 
-def test_realtime_indices_maps_and_keeps_volume_unit(monkeypatch):
-    """指数快照 → realtime record; volume 无股→手口径, 直接透传。"""
+@pytest.mark.parametrize(
+    ("symbol", "shares", "lots"),
+    [
+        ("000001.SH", 48_330_591_000, 483_305_910),
+        ("399001.SZ", 56_188_212_000, 561_882_120),
+        ("399006.SZ", 18_267_883_000, 182_678_830),
+        ("000680.SH", 4_259_011_500, 42_590_115),
+    ],
+)
+def test_realtime_indices_maps_volume_shares_to_lots(monkeypatch, symbol, shares, lots):
+    """2026-10-13 快照复现: 指数与股票均为股, 入库前统一转手。"""
     provider, fake = _index_provider_with(
         monkeypatch,
-        rows=[_row("000001.SH", volume=576656606, price_change_ratio_pct=0.86)],
+        rows=[_row(symbol, volume=shares, price_change_ratio_pct=0.86)],
         server_ts=1787542612000,
     )
-    records = provider.get_realtime_indices(["000001.SH", "399001.SZ"])
-    assert fake.calls == [["000001.SH", "399001.SZ"]]
+    records = provider.get_realtime_indices([symbol])
+    assert fake.calls == [[symbol]]
     assert len(records) == 1
     r = records[0]
-    assert r["symbol"] == "000001.SH"
+    assert r["symbol"] == symbol
     assert r["change_pct"] == pytest.approx(0.0086)
     assert r["timestamp"] == 1787542612000
-    assert r["volume"] == 576656606  # 不做 /100
+    assert r["volume"] == lots
+    assert r["amount"] == 1.83e9
+
+
+@pytest.mark.parametrize(
+    ("shares", "lots"),
+    [(None, None), (0, 0), (99, 0), (123_456, 1234), ("123456", 1234)],
+)
+def test_realtime_indices_volume_boundaries(monkeypatch, shares, lots):
+    provider, _ = _index_provider_with(
+        monkeypatch, rows=[_row("000001.SH", volume=shares)],
+    )
+    assert provider.get_realtime_indices(["000001.SH"])[0]["volume"] == lots
 
 
 def test_realtime_indices_skips_bj_symbols(monkeypatch):
