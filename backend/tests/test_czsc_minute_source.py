@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import RLock
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -111,3 +111,33 @@ def test_minute_provider_directory_cannot_escape_data_root(setup):
     repo, _, _, _ = setup
     with pytest.raises(ValueError):
         repo.minute_chart_root("../../outside")
+
+
+def test_etf_sync_routes_asset_and_isolates_published_minutes(setup):
+    repo, provider, client, native = setup
+    repo.resolve_asset_type = lambda _: "etf"
+    frame = pl.DataFrame({
+        "symbol": ["510300.SH"] * 30,
+        "datetime": [datetime(2026, 9, 21, 9, 31) + timedelta(minutes=i) for i in range(30)],
+        "open": 4.0, "high": 4.1, "low": 3.9, "close": 4.0, "volume": 10.0, "amount": 4000.0,
+    })
+    provider.get_minute.return_value = frame
+    stock_generation = repo.get_minute_chart_generation(provider="exchange_minute")
+    response = client.post("/api/kline/sync_minute_single", json={
+        "symbol": "510300.SH", "asset_type": "etf", "days": 30, "purpose": "czsc", "provider": "exchange_minute",
+    })
+    assert response.status_code == 200, response.text
+    assert provider.get_minute.call_args.kwargs['asset_type'] == 'etf'
+    assert repo.get_minute_chart_generation(provider="exchange_minute") == stock_generation
+    assert repo.get_minute_published("510300.SH", datetime(2027, 1, 1), 100, provider="exchange_minute").is_empty()
+    for timeframe in ['1m', '5m', '30m']:
+        chart = czsc_chart.get_chart(repo, '510300.SH', asset_type='etf', timeframe=timeframe, now=datetime(2026, 9, 21, 10))
+        assert chart['status'] == 'ready'
+        assert chart['asset_type'] == 'etf'
+        assert chart['rows'][-1]['close'] == 4.0
+        assert chart['rows'][-1]['date'] <= '2026-09-21T10:00'
+    mismatch = client.post('/api/kline/sync_minute_single', json={
+        'symbol': '510300.SH', 'asset_type': 'stock', 'purpose': 'czsc',
+    })
+    assert mismatch.status_code == 400
+    native.assert_not_called()

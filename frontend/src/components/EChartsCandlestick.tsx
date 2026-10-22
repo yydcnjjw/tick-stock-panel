@@ -4,6 +4,7 @@ import { fmtPct } from '@/lib/format'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 import { structureSeries, type ChartStructures } from './chartStructures'
+import type { ChartViewport } from './chartTimeRange'
 import { movingAverageLines, movingAverageSeries, type MovingAverageOptions, type MovingAverageValues } from './chartMovingAverages'
 
 export interface OHLC extends MovingAverageValues {
@@ -337,6 +338,8 @@ interface Props {
   onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 默认可见蜡烛根数, 默认 60; 'all' = 初始适配显示全部返回数据 */
   visibleBars?: number | 'all'
+  /** Explicit viewport request; a new object applies again, without changing data or structures. */
+  viewport?: ChartViewport
   /** 已激活的子图 key 列表 (含 vol, 按点击顺序) */
   activeIndicators?: string[]
   /** 成交量柱相对前 N 个交易日均量的显示设置 */
@@ -874,6 +877,7 @@ export function EChartsCandlestick({
   onDateClick,
   onPriceDoubleClick,
   visibleBars = 60,
+  viewport,
   activeIndicators = [],
   volumeCompare = { enabled: true, days: 1 },
   addedDate,
@@ -894,6 +898,7 @@ export function EChartsCandlestick({
   const infoIdxRef = useRef<number>(data.length - 1)
   const compactRef = useRef(false)
   const userZoomRef = useRef<{ start: number; end: number } | null>(null)
+  const appliedViewportRef = useRef<Props['viewport']>()
   // dataZoom 监听只在图表创建时注册一次, 直接调用会一直执行「创建那次渲染」的 updateCompactPresentation:
   // 它的 data/dateIndexMap/markers 停在旧标的, 会把上一只的买卖标记 merge 回新标的图上。
   // 与 dataRef/getInfoBarHTMLRef 同法, 经 ref 取最新一次渲染的函数。
@@ -1257,18 +1262,25 @@ export function EChartsCandlestick({
 
     // 恢复用户缩放位置
     const zoom = userZoomRef.current
-    if (zoom) {
+    if (viewport && (appliedViewportRef.current !== viewport || !zoom)) {
+      if ('reset' in viewport) {
+        chart.dispatchAction({ type: 'dataZoom', start: initialZoom.start, end: initialZoom.end })
+      } else {
+        chart.dispatchAction({ type: 'dataZoom', startValue: viewport.startValue, endValue: viewport.endValue })
+      }
+    } else if (zoom) {
       chart.dispatchAction({ type: 'dataZoom', start: zoom.start, end: zoom.end })
     } else {
       chart.dispatchAction({ type: 'dataZoom', start: initialZoom.start, end: initialZoom.end })
     }
+    appliedViewportRef.current = viewport
 
     // 初始信息栏
     const infoEl = infoBarRef.current
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, structures, markers, ranges, priceLines, linkedPrice, showMA, movingAverages, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, structures, markers, ranges, priceLines, linkedPrice, showMA, movingAverages, showMarkersProp, activeIndicators, volumeCompare, addedDate, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, viewport])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {

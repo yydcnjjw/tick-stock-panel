@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from app.services.fs_utils import atomic_write_text
 
 router = APIRouter(prefix="/api/analysis-menus", tags=["analysis-menus"])
+AnalysisTemplate = Literal["dimension_rank", "ranking", "table", "spot_gold"]
 
 
 class AnalysisColumn(BaseModel):
@@ -34,9 +35,10 @@ class DefaultSort(BaseModel):
 class AnalysisMenu(BaseModel):
     id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
     label: str = Field(..., min_length=1, max_length=64)
+    nav_group: str | None = Field(default=None, max_length=64)
     icon: str = "chart"
     data_source: str = Field(..., min_length=1)
-    template: Literal["dimension_rank", "ranking", "table"] = "dimension_rank"
+    template: AnalysisTemplate = "dimension_rank"
     dimension_field: str | None = None
     rank_field: str | None = None
     group_columns: list[AnalysisColumn] = Field(default_factory=list)
@@ -51,9 +53,10 @@ class AnalysisMenu(BaseModel):
 
 class UpsertAnalysisMenu(BaseModel):
     label: str = Field(..., min_length=1, max_length=64)
+    nav_group: str | None = Field(default=None, max_length=64)
     icon: str = "chart"
     data_source: str = Field(..., min_length=1)
-    template: Literal["dimension_rank", "ranking", "table"] = "dimension_rank"
+    template: AnalysisTemplate = "dimension_rank"
     dimension_field: str | None = None
     rank_field: str | None = None
     group_columns: list[AnalysisColumn] = Field(default_factory=list)
@@ -155,6 +158,8 @@ def reorder_menus(request: Request, body: ReorderMenusReq):
 def upsert_menu(request: Request, menu_id: str, body: UpsertAnalysisMenu):
     if not menu_id.replace("_", "").isalnum():
         raise HTTPException(400, "菜单标识只能包含字母、数字和下划线")
+    if body.template == "spot_gold" and body.data_source != "spot_gold":
+        raise HTTPException(422, "伦敦金四周期图须使用伦敦金数据集")
     existing = next((m for m in _load_saved(request) if m.id == menu_id), None)
     menu = AnalysisMenu(
         id=menu_id,

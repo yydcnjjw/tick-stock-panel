@@ -394,7 +394,7 @@ def get_czsc_chart(
     request: Request,
     symbol: str = Query(..., pattern=r"^[0-9]{6}\.(SH|SZ|BJ)$"),
     timeframe: Literal["1m", "5m", "30m", "1d", "1w"] = "1d",
-    asset_type: Literal["stock", "index"] | None = None,
+    asset_type: Literal["stock", "etf", "index"] | None = None,
 ):
     from app.enriched_generation import EnrichedGenerationUnavailableError
     from app.services.czsc_chart import get_chart
@@ -1377,14 +1377,17 @@ async def sync_minute_single(request: Request, body: dict):
 
     # 指数分钟K无本地存储, 落库会污染股票分钟表 kline_minute;
     # 指数分钟数据走 /api/index/minute 实时读取, 此端点显式拒绝。
-    if repo.resolve_asset_type(symbol) == "index":
+    resolved_asset = repo.resolve_asset_type(symbol)
+    if resolved_asset == "index":
         raise HTTPException(status_code=400, detail="指数分钟K不支持落库同步 (指数分钟数据走 /api/index/minute 实时读取)")
 
     route = None
     if purpose == "czsc":
         from app.services import czsc_chart
-        if repo.resolve_asset_type(symbol) != "stock":
-            raise HTTPException(status_code=400, detail="chan.py 分钟图仅支持 A 股股票")
+        if resolved_asset not in {"stock", "etf"}:
+            raise HTTPException(status_code=400, detail="chan.py 分钟图仅支持股票和 ETF")
+        if body.get("asset_type") is not None and body["asset_type"] != resolved_asset:
+            raise HTTPException(status_code=400, detail="标的与所选资产类型不匹配")
         route = czsc_chart.minute_route()
         if body.get("provider") is not None and body["provider"] != route["effective"]:
             raise HTTPException(status_code=409, detail="chan.py 分钟数据源已变更,请刷新后重试")
@@ -1398,7 +1401,7 @@ async def sync_minute_single(request: Request, body: dict):
 
     def _run():
         if route is not None:
-            return czsc_chart.sync_minute(repo, symbol, provider=route["effective"], days=days)
+            return czsc_chart.sync_minute(repo, symbol, provider=route["effective"], days=days, asset_type=resolved_asset)
         return kline_sync.sync_and_persist_minute([symbol], repo, capset, days=days, force_full_days=True)
 
     try:

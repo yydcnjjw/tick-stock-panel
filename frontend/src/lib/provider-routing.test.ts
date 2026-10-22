@@ -9,6 +9,7 @@ const CAPS: Pick<CapabilityRoute, 'id' | 'field'>[] = [
   { id: 'realtime', field: 'realtime_data_provider' },
   { id: 'minute', field: 'minute_data_provider' },
   { id: 'czsc_minute', field: 'czsc_minute_data_provider' },
+  { id: 'spot_gold', field: 'spot_gold_data_provider' },
   { id: 'depth5', field: 'depth5_data_provider' },
   { id: 'financial', field: 'financial_data_provider' },
   { id: 'full_minute', field: 'full_minute_data_provider' },
@@ -20,6 +21,7 @@ const ALL_FIELDS: ProviderField[] = [
   'realtime_data_provider',
   'minute_data_provider',
   'czsc_minute_data_provider',
+  'spot_gold_data_provider',
   'depth5_data_provider',
   'financial_data_provider',
   'full_minute_data_provider',
@@ -87,7 +89,8 @@ describe('buildProviderRouting', () => {
   it('默认路由覆盖全部字段并保持结构分钟源独立', () => {
     expect(Object.keys(DEFAULT_ROUTING).sort()).toEqual([...ALL_FIELDS].sort())
     expect(DEFAULT_ROUTING.czsc_minute_data_provider).toBe('exchange_minute')
-    for (const field of ALL_FIELDS.filter(field => field !== 'czsc_minute_data_provider')) {
+    expect(DEFAULT_ROUTING.spot_gold_data_provider).toBe('sina_gold')
+    for (const field of ALL_FIELDS.filter(field => !['czsc_minute_data_provider', 'spot_gold_data_provider'].includes(field))) {
       expect(DEFAULT_ROUTING[field]).toBe('tickflow')
     }
   })

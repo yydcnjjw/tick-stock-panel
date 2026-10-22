@@ -5,7 +5,7 @@
  * - SSE invalidation 基于 SSE_INVALIDATE_PREFIXES 列表，新增 key 无需改 useQuoteStream。
  */
 
-import type { CzscTimeframe } from './api'
+import type { CzscAssetType, CzscTimeframe } from './api'
 
 // ===== Query Key 工厂 =====
 
@@ -84,7 +84,8 @@ export const QK = {
   extPages:             ['ext-pages'] as const,
 
   // Kline
-  czscChart:            (symbol: string, timeframe: CzscTimeframe, provider?: string, assetType?: 'stock' | 'index') => ['czsc', symbol, timeframe, 'chan-v1-429d6ed-div1', 1000, ...(provider ? [provider] : []), assetType ?? 'auto'] as const,
+  spotGoldChart:        (provider: string) => ['spot-gold', provider, 'v1'] as const,
+  czscChart:            (symbol: string, timeframe: CzscTimeframe, provider?: string, assetType?: CzscAssetType) => ['czsc', symbol, timeframe, 'chan-v1-429d6ed-div1', 1000, ...(provider ? [provider] : []), assetType ?? 'auto'] as const,
   czscDaily:            (symbol: string) => ['czsc-daily', symbol, '1d', 'chan-v1-429d6ed-div1', 1000] as const,
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,

@@ -22,6 +22,7 @@ DEFAULT_CURRENT = {
     "depth5_data_provider": "tickflow",
     "realtime_data_provider": "tickflow",
     "financial_data_provider": "tickflow",
+    "spot_gold_data_provider": "sina_gold",
 }
 
 
@@ -50,29 +51,34 @@ def test_czsc_minute_uses_minute_dataset_with_an_independent_route(monkeypatch):
 
 def test_registry_covers_all_routing_fields():
     """注册表是能力的单一权威: 可路由能力与偏好键一一对应、无重复;
-    full_minute 为不可路由能力 (field=None, 仅 TickFlow Expert 提供)。"""
+    黄金拥有独立路由，不属于 TickFlow 的订阅能力。"""
     routable = [c["field"] for c in CAPABILITY_REGISTRY if c["field"] is not None]
     assert sorted(routable) == sorted(DEFAULT_CURRENT)
     assert len(set(routable)) == len(routable)
     assert {c["id"] for c in CAPABILITY_REGISTRY} == {
-        "realtime", "daily", "minute", "czsc_minute", "full_minute", "depth5", "adj_factor", "financial",
+        "realtime", "daily", "minute", "czsc_minute", "full_minute", "depth5", "adj_factor", "financial", "spot_gold",
     }
     full_minute = next(c for c in CAPABILITY_REGISTRY if c["id"] == "full_minute")
     assert full_minute["field"] == "full_minute_data_provider"
     assert full_minute["tf_tier"] == "expert"
     for cap in CAPABILITY_REGISTRY:
-        assert cap["default"] == ("exchange_minute" if cap["id"] == "czsc_minute" else "tickflow")
+        assert cap["default"] == {"czsc_minute": "exchange_minute", "spot_gold": "sina_gold"}.get(cap["id"], "tickflow")
         assert cap["tf_tier"] in ("none", "starter", "pro", "expert")
         assert "follow" not in cap
 
 
 def test_matrix_without_third_party_sources(monkeypatch):
-    """无插件无自定义源: 每个能力只剩 TickFlow 候选, 默认路由全部生效。"""
+    """无插件时 A 股能力由 TickFlow 提供，黄金缺少候选且不可用。"""
     _fake_sources(monkeypatch, [])
     matrix = build_capability_matrix(dict(DEFAULT_CURRENT), tickflow_tier="expert")
     assert matrix["tickflow_tier"] == "expert"
-    assert len(matrix["capabilities"]) == 8
+    assert len(matrix["capabilities"]) == 9
     for cap in matrix["capabilities"]:
+        if cap["id"] == "spot_gold":
+            assert cap["candidates"] == [] and cap["usable"] is False
+            assert cap["tf_available"] is False and cap["tf_supported"] is False
+            assert cap["effective"] == "sina_gold"
+            continue
         names = [c["name"] for c in cap["candidates"]]
         assert names == ["tickflow"]
         assert cap["candidates"][0]["kind"] == "builtin"
@@ -301,6 +307,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "daily_data_provider": "daily-src",
         "minute_data_provider": "min-src",
         "czsc_minute_data_provider": "czsc-src",
+        "spot_gold_data_provider": "gold-src",
         "full_minute_data_provider": "fm-src",
         "depth5_data_provider": "d5-src",
         "adj_factor_provider": "adj-src",
@@ -311,6 +318,7 @@ def test_api_endpoint_injects_all_routing_preferences(monkeypatch):
         "daily_data_provider": "get_daily_data_provider",
         "minute_data_provider": "get_minute_data_provider",
         "czsc_minute_data_provider": "get_czsc_minute_data_provider",
+        "spot_gold_data_provider": "get_spot_gold_data_provider",
         "full_minute_data_provider": "get_full_minute_data_provider",
         "depth5_data_provider": "get_depth5_data_provider",
         "adj_factor_provider": "get_adj_factor_provider",
@@ -362,3 +370,17 @@ def test_api_endpoint_full_minute_usable_follows_preference(monkeypatch):
     assert fm["effective"] == "eltdx"
     assert fm["usable"] is True
     assert fm["tf_available"] is False
+
+
+def test_spot_gold_routes_independently_without_tickflow_candidate(monkeypatch):
+    _fake_sources(monkeypatch, [
+        {'name': name, 'display_name': name, 'datasets': ['spot_gold'], 'available': True}
+        for name in ['sina_gold', 'alternate_gold']
+    ])
+    for tier in ['none', 'expert']:
+        caps = _by_id(build_capability_matrix({'spot_gold_data_provider': 'alternate_gold'}, tier))
+        gold = caps['spot_gold']
+        assert gold['usable'] and gold['effective'] == 'alternate_gold'
+        assert gold['tf_supported'] is False and gold['tf_available'] is False
+        assert {c['name'] for c in gold['candidates']} == {'sina_gold', 'alternate_gold'}
+        assert [c['name'] for c in caps['daily']['candidates']] == ['tickflow']

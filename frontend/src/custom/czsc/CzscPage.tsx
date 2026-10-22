@@ -8,33 +8,23 @@ import { useCapabilityMatrix } from '@/lib/useSharedQueries'
 import { cnSignal, STRUCTURE_COVERAGE_REASON_LABELS, CHAN_BSP_LABELS } from '@/lib/signals'
 import { StockFinancialSearch } from '@/components/financials/StockFinancialSearch'
 import { EChartsCandlestick } from '@/components/EChartsCandlestick'
+import { ChartTimeRangeControls, useChartTimeRange } from '@/components/ChartTimeRangeControls'
 import type { ChartStructures } from '@/components/chartStructures'
-import { MA_PERIODS, type MovingAverageOptions } from '@/components/chartMovingAverages'
+import type { MovingAverageOptions } from '@/components/chartMovingAverages'
+import { loadChanMovingAverages, MovingAverageControls } from '@/components/MovingAverageControls'
 import { storage } from '@/lib/storage'
 
 const LAYERS = { fractals: '分型', strokes: '已完成笔', centers: '笔中枢', segments: '线段', segmentCenters: '线段中枢', candidates: '买卖点端点（含候选）', unfinished: '未完成结构', signals: '确认事件' }
 const PERIODS: Record<CzscTimeframe, string> = { '1m': '1分', '5m': '5分', '30m': '30分', '1d': '日线', '1w': '周线' }
 const INDICATORS = ['vol', 'macd']
 const VOLUME_COMPARE = { enabled: false, days: 1 }
-const DEFAULT_MA: MovingAverageOptions = { type: 'SMA', periods: MA_PERIODS, showCrosses: true }
-
-function loadMovingAverages(): MovingAverageOptions {
-  const saved = storage.chanMovingAverages.get(null)
-  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return DEFAULT_MA
-  const value = saved as Partial<MovingAverageOptions>
-  return {
-    type: value.type === 'EMA' ? 'EMA' : 'SMA',
-    periods: Array.isArray(value.periods) ? MA_PERIODS.filter(n => value.periods!.includes(n)) : MA_PERIODS,
-    showCrosses: typeof value.showCrosses === 'boolean' ? value.showCrosses : true,
-  }
-}
 
 export default function CzscPage() {
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const symbol = params.get('symbol') ?? ''
   const requestedAsset = params.get('asset_type')
-  const assetType: CzscAssetType | undefined = requestedAsset === 'stock' || requestedAsset === 'index' ? requestedAsset : undefined
+  const assetType: CzscAssetType | undefined = requestedAsset === 'stock' || requestedAsset === 'etf' || requestedAsset === 'index' ? requestedAsset : undefined
   const validAsset = requestedAsset === null || assetType !== undefined
   const requestedPeriod = params.get('timeframe') ?? '1d'
   const validPeriod = Object.hasOwn(PERIODS, requestedPeriod)
@@ -45,7 +35,7 @@ export default function CzscPage() {
   const route = matrix.data?.capabilities.find(cap => cap.id === 'czsc_minute')
   const provider = minute && assetType !== 'index' ? route?.effective : undefined
   const [layers, setLayers] = useState<Record<keyof typeof LAYERS, boolean>>({ fractals: true, strokes: true, centers: true, segments: true, segmentCenters: true, candidates: true, unfinished: true, signals: true })
-  const [movingAverages, setMovingAverages] = useState(loadMovingAverages)
+  const [movingAverages, setMovingAverages] = useState(loadChanMovingAverages)
   const updateMovingAverages = (next: MovingAverageOptions) => {
     setMovingAverages(next)
     storage.chanMovingAverages.set(next)
@@ -63,16 +53,20 @@ export default function CzscPage() {
     enabled: !!symbol && validAsset, staleTime: 0, refetchOnMount: 'always', refetchOnWindowFocus: false, retry: false,
   })
   const sync = useMutation({
-    mutationFn: ({ stock, source }: { stock: string; source: string; asset?: CzscAssetType }) => api.syncCzscMinute(stock, source, 30),
+    mutationFn: ({ stock, source, asset }: { stock: string; source: string; asset?: CzscAssetType }) => api.syncCzscMinute(stock, source, 30, asset),
     onSuccess: async (_, { stock, source, asset }) => {
-      const keys = (['1m', '5m', '30m'] as const).map(period => QK.czscChart(stock, period, source, asset))
+      const keys = (['1m', '5m', '30m'] as const).flatMap(period => [
+        QK.czscChart(stock, period, source, asset), QK.czscChart(stock, period, source),
+      ])
       await Promise.all(keys.map(queryKey => queryClient.invalidateQueries({ queryKey })))
     },
   })
   const data = query.data
+  const timeSelection = useChartTimeRange(data?.rows, minute)
+  const resolvedAsset = assetType ?? data?.asset_type
   const isIndex = assetType === 'index' || data?.asset_type === 'index'
   const stockMinute = minute && !isIndex
-  const currentSync = sync.variables?.stock === symbol && sync.variables.source === provider && sync.variables.asset === assetType
+  const currentSync = sync.variables?.stock === symbol && sync.variables.source === provider && sync.variables.asset === resolvedAsset
   const structures = useMemo<ChartStructures>(() => ({
     segments: [...(layers.strokes ? data?.strokes ?? [] : []),
       ...(layers.unfinished ? (data?.unfinished ?? []).map(s => ({ ...s, dashed: true })) : []),
@@ -99,10 +93,10 @@ export default function CzscPage() {
         <Link to={isIndex ? `/indices?symbol=${encodeURIComponent(symbol)}` : '/watchlist'} className="text-xs text-accent hover:underline">{isIndex ? '返回指数' : '返回自选'}</Link>
       </div>
       <StockFinancialSearch onSelect={(next, _name, nextAsset) => {
-        setParams({ symbol: next, asset_type: nextAsset === 'index' ? 'index' : 'stock',
+        setParams({ symbol: next, asset_type: nextAsset === 'index' ? 'index' : nextAsset === 'etf' ? 'etf' : 'stock',
           timeframe: nextAsset === 'index' && minute ? '1d' : timeframe })
         setSelection(null)
-      }} assetTypes="stock,index" placeholder="输入股票或指数代码、名称，如 沪深300 / 000001.SH" />
+      }} assetTypes="stock,etf,index" placeholder="输入股票、ETF 或指数代码、名称" />
       <div role="group" aria-label="图表周期" className="flex flex-wrap gap-2">
         {(Object.entries(PERIODS) as [CzscTimeframe, string][]).map(([value, label]) => (
           <button key={value} type="button" aria-pressed={timeframe === value} disabled={isIndex && value.endsWith('m')}
@@ -115,17 +109,17 @@ export default function CzscPage() {
         ))}
       </div>
       {!validPeriod && <p role="status" className="text-xs text-warning">地址中的周期无效，已显示日线。</p>}
-      {!validAsset && <p role="alert" className="text-xs text-warning">地址中的资产类型无效，请通过股票或指数搜索重新选择。</p>}
+      {!validAsset && <p role="alert" className="text-xs text-warning">地址中的资产类型无效，请通过股票、ETF 或指数搜索重新选择。</p>}
       {isIndex && <p className="text-xs text-muted">指数仅支持日线和周线；可搜索现有指数目录，历史覆盖以本地数据为准。</p>}
       {timeframe === '1w' && <p className="text-xs text-muted">周线在北京时间周五 15:00 后纳入，节假日短周也采用此边界。</p>}
-      {!symbol && <div role="status" className="rounded-card border border-border p-8 text-center text-sm text-muted">搜索股票或指数，查看结构与确认事件。</div>}
+      {!symbol && <div role="status" className="rounded-card border border-border p-8 text-center text-sm text-muted">搜索股票、ETF 或指数，查看结构与确认事件。</div>}
       {symbol && <>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div><h2 className="text-base font-medium text-foreground">{data?.name ?? symbol} <span className="font-mono text-xs text-muted">{symbol}</span></h2>
             {data?.cutoff && <p className="mt-1 text-xs text-muted">行情截止 {data.cutoff} · 成交量：手 · 成交额：元</p>}</div>
           <div className="flex flex-wrap gap-2">
-          {stockMinute && <button type="button" onClick={() => provider && sync.mutate({ stock: symbol, source: provider, asset: assetType })} disabled={sync.isPending || !validAsset || !data || query.isError || !route?.usable || data.status === 'unavailable'}
-            title="补取当前股票近期分钟历史，同步后刷新各分钟周期"
+          {stockMinute && <button type="button" onClick={() => provider && sync.mutate({ stock: symbol, source: provider, asset: resolvedAsset })} disabled={sync.isPending || !validAsset || !data || query.isError || !route?.usable || data.status === 'unavailable'}
+            title="补取当前标的近期分钟历史，同步后刷新各分钟周期"
             className="inline-flex items-center gap-1.5 rounded-btn border border-accent/40 px-3 py-1.5 text-xs text-accent disabled:opacity-50">
             <Download size={13} />{sync.isPending && currentSync ? '正在同步分钟数据…' : '同步分钟数据'}</button>}
           <button type="button" onClick={() => query.refetch()} disabled={!validAsset || query.isFetching || sync.isPending}
@@ -146,7 +140,7 @@ export default function CzscPage() {
           {data ? '刷新失败，当前保留上次结果。' : ''}{query.error.message}</div>}
         {data && data.status !== 'ready' && <div role="status" className="rounded-card border border-border p-6 text-sm text-muted">
           {data.reason}{data.status === 'empty' && <Link to="/data" className="ml-2 text-accent underline">前往数据管理</Link>}
-          {stockMinute && data.status === 'empty' && <p className="mt-2">点击上方“同步分钟数据”补取当前股票行情；“刷新”只重读已有本地数据。</p>}
+          {stockMinute && data.status === 'empty' && <p className="mt-2">点击上方“同步分钟数据”补取当前标的行情；“刷新”只重读已有本地数据。</p>}
           {data.status === 'unavailable' && data.unavailable_reason !== 'unsupported_timeframe' && <p className="mt-2">请检查后端 chan.py 组件是否完整。</p>}
         </div>}
         {data?.status === 'ready' && <>
@@ -158,35 +152,12 @@ export default function CzscPage() {
                 </label>
               ))}
             </div>
-            <div role="group" aria-label="均线设置" className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border p-3">
-              <span className="text-xs text-muted">均线</span>
-              <div className="flex gap-1">
-                {(['SMA', 'EMA'] as const).map(type => (
-                  <button key={type} type="button" aria-pressed={movingAverages.type === type}
-                    title={type === 'SMA' ? '简单移动平均线' : '指数移动平均线'}
-                    onClick={() => updateMovingAverages({ ...movingAverages, type })}
-                    className={`rounded-btn border px-2 py-1 text-xs ${movingAverages.type === type ? 'border-accent bg-accent/10 text-accent' : 'border-border text-secondary hover:bg-elevated'}`}>
-                    {type}
-                  </button>
-                ))}
-              </div>
-              {MA_PERIODS.map(period => (
-                <label key={period} className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
-                  <input type="checkbox" checked={movingAverages.periods.includes(period)}
-                    onChange={() => updateMovingAverages({ ...movingAverages,
-                      periods: MA_PERIODS.filter(n => n === period ? !movingAverages.periods.includes(n) : movingAverages.periods.includes(n)) })} />
-                  {movingAverages.type}{period}
-                </label>
-              ))}
-              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-secondary">
-                <input type="checkbox" checked={movingAverages.showCrosses}
-                  onChange={() => updateMovingAverages({ ...movingAverages, showCrosses: !movingAverages.showCrosses })} />5↔10 交叉
-              </label>
-              <span className="text-[11px] text-muted">满 N 根显示 · 5、10 均显示时标注交叉</span>
-            </div>
+            <MovingAverageControls value={movingAverages} onChange={updateMovingAverages} />
+            <ChartTimeRangeControls selection={timeSelection} />
             <div className="p-1 sm:p-3">
-              {!!data.rows?.length && <EChartsCandlestick key={`${symbol}-${timeframe}`} data={data.rows} structures={structures}
+              {!!data.rows?.length && !timeSelection.empty && <EChartsCandlestick key={`${symbol}-${timeframe}`} data={data.rows} structures={structures}
                 stockInfo={{ name: data.name }} height={650} visibleBars={250} movingAverages={movingAverages}
+                viewport={timeSelection.viewport}
                 activeIndicators={INDICATORS} volumeCompare={VOLUME_COMPARE}
                 onDateClick={day => setSelection({ symbol, timeframe, date: day })} />}
               {!data.rows?.length && <p role="status" className="p-8 text-center text-muted">当前数据缺少有效价格，暂无可绘制的 K 线。</p>}

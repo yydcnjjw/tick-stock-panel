@@ -25,6 +25,11 @@ from __future__ import annotations
 
 from app.data_providers import custom as custom_sources
 
+SPOT_GOLD_CAPABILITY = {
+    "id": "spot_gold", "label": "伦敦金", "desc": "现货黄金四周期结构图",
+    "field": "spot_gold_data_provider", "default": "sina_gold", "tf_tier": "none", "tf_supported": False,
+}
+
 CAPABILITY_REGISTRY: list[dict] = [
     {
         "id": "daily",
@@ -95,6 +100,7 @@ CAPABILITY_REGISTRY: list[dict] = [
         # TickFlow 侧需 Expert 档; 插件/自定义源声明 full_minute 数据集即可提供
         # (插件实现 get_intraday_batch / 可选 get_intraday_latest, YAML 仅修复轮)
     },
+    SPOT_GOLD_CAPABILITY,
 ]
 
 _TICKFLOW_CANDIDATE = {
@@ -170,9 +176,9 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
 
     capabilities = []
     for cap in CAPABILITY_REGISTRY:
-        # field=None → 不可路由能力 (仅 TickFlow 提供, 无路由偏好), 生效源恒为默认
+        # field=None → 固定源能力 (无路由偏好), 生效源恒为默认
         effective = current.get(cap["field"], cap["default"]) if cap["field"] else cap["default"]
-        tf_available = tier_rank >= _TIER_RANK[cap["tf_tier"]]
+        tf_available = cap.get("tf_supported", True) and tier_rank >= _TIER_RANK[cap["tf_tier"]]
         candidates: list[dict] = []
         pending: list[dict] = []
         if tf_available:
@@ -197,6 +203,7 @@ def build_capability_matrix(current: dict[str, str], tickflow_tier: str = "none"
             "field": cap["field"],
             "default": cap["default"],
             "tf_tier": cap["tf_tier"],
+            "tf_supported": cap.get("tf_supported", True),
             "tf_available": tf_available,
             "usable": usable,
             "current": effective,

@@ -291,6 +291,12 @@ def get_czsc_minute_data_provider() -> str:
     return str(load().get("czsc_minute_data_provider") or "exchange_minute").lower()
 
 
+def get_spot_gold_data_provider() -> str:
+    """黄金独立路由；不可用时保留选择并报错，避免悄然切换报价口径。"""
+    from app.data_providers.capabilities import SPOT_GOLD_CAPABILITY
+    return str(load().get("spot_gold_data_provider") or SPOT_GOLD_CAPABILITY["default"]).lower()
+
+
 def get_full_minute_data_provider() -> str:
     provider = str(load().get("full_minute_data_provider", "tickflow") or "tickflow").lower()
     return provider if provider in _allowed_data_providers() else "tickflow"

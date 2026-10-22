@@ -205,7 +205,7 @@ export function SettingsMenuSettingsPanel() {
 
   const analysisEntries: NavEntry[] = (menus.data?.items ?? []).map(m => ({
     id: m.id,
-    label: m.label,
+    label: m.nav_group ? `${m.nav_group} → ${m.label}` : m.label,
     type: 'analysis' as const,
     visible: m.visible,
   }))
@@ -345,6 +345,7 @@ export function SettingsMenuSettingsPanel() {
         <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
           拖动左侧手柄调整菜单排列顺序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。
           新安装用户的扩展页面默认隐藏，在这里点眼睛图标即可逐个开启。
+          同组扩展页面集中显示，组的位置取首个可见页面的位置；分组可在扩展页面中修改。
         </p>
         <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">
           <span>架构归属 (悬停看原因):</span>

@@ -35,6 +35,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
   chart.handlers = {}
   chart.setOption.mockClear()
+  chart.dispatchAction.mockClear()
   chart.on.mockImplementation((name: string, callback: (event?: any) => void) => {
     chart.handlers[name] = callback
   })
@@ -60,6 +61,29 @@ function lastMarkPoint(): string {
 async function hoverCandle(index: number) {
   await act(async () => { chart.handlers.updateAxisPointer?.({ axesInfo: [{ value: index }] }) })
 }
+
+it('applies exact candle indices without slicing structures, preserves free zoom, and can reapply or reset', async () => {
+  const data = rows(10)
+  const structures = { segments: [{ start: DAYS[0], end: DAYS[50], start_price: 9, end_price: 11 }] }
+  const viewport = { startValue: 10, endValue: 20 }
+  const render = async (request: typeof viewport | { reset: true }, showMA = true) => {
+    await act(async () => root.render(<EChartsCandlestick data={data} structures={structures} viewport={request}
+      visibleBars={10} symbol="test" showMA={showMA} />))
+  }
+  await render(viewport)
+  expect(chart.dispatchAction).toHaveBeenLastCalledWith({ type: 'dataZoom', startValue: 10, endValue: 20 })
+  const option = chart.setOption.mock.calls.find(call => call[0]?.xAxis)?.[0] as any
+  expect(option.xAxis[0].data).toHaveLength(data.length)
+  expect(option.series.some((series: any) => series.type === 'custom')).toBe(true)
+  await act(async () => chart.handlers.dataZoom())
+  await render(viewport, false)
+  expect(chart.dispatchAction).toHaveBeenLastCalledWith({ type: 'dataZoom', start: 0, end: 100 })
+  await render({ ...viewport }, false)
+  expect(chart.dispatchAction).toHaveBeenLastCalledWith({ type: 'dataZoom', startValue: 10, endValue: 20 })
+  await render({ reset: true })
+  expect(chart.dispatchAction.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'dataZoom', end: 100 })
+  expect(chart.dispatchAction.mock.calls.at(-1)?.[0].start).toBeGreaterThan(80)
+})
 
 it('切标的后响应 dataZoom 仍用当前标的的买卖标记, 不回退到上一只', async () => {
   const render = async (symbol: string, data: OHLC[], markerLabel: string, markerDate: string) => {

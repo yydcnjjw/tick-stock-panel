@@ -99,10 +99,46 @@ async function request<T>(path: string, init?: RequestOptions): Promise<T> {
 }
 
 export type CzscTimeframe = '1m' | '5m' | '30m' | '1d' | '1w'
-export type CzscAssetType = 'stock' | 'index'
+export type CzscAssetType = 'stock' | 'etf' | 'index'
 
 export interface CzscChartLine {
   start: string; end: string; start_price: number; end_price: number; confirmed?: boolean; dashed?: boolean
+}
+export type GoldTimeframe = '1w' | '1d' | '4h' | '1h'
+export interface SpotGoldPanel {
+  timeframe: GoldTimeframe
+  label: string
+  status: 'ready' | 'empty'
+  cutoff: string | null
+  input_start: string | null
+  input_count: number
+  source_count: number
+  rows: { date: string; open: number; high: number; low: number; close: number; closed: boolean;
+    ma5?: number | null; ma10?: number | null; ma20?: number | null; ma60?: number | null;
+    ema5?: number | null; ema10?: number | null; ema20?: number | null; ema60?: number | null;
+    macd_dif?: number | null; macd_dea?: number | null; macd_hist?: number | null }[]
+  strokes: CzscChartLine[]
+  unfinished: CzscChartLine[]
+  segments: CzscChartLine[]
+  centers: { start: string; end: string; low: number; high: number; confirmed: boolean }[]
+  segment_centers: SpotGoldPanel['centers']
+  fractals?: { date: string; price: number; kind: 'top' | 'bottom' }[]
+}
+export interface SpotGoldChart {
+  symbol: string
+  name: string
+  status: 'ready' | 'stale'
+  reason: string | null
+  provider: string
+  source: string
+  source_url: string
+  price_basis: string
+  timezone: string
+  refreshed_at: string
+  version: string
+  profile_id: string
+  panels: SpotGoldPanel[]
+  notes: string[]
 }
 export interface CzscChartResponse {
   symbol: string
@@ -2104,6 +2140,7 @@ export type ProviderField =
   | 'adj_factor_provider'
   | 'minute_data_provider'
   | 'czsc_minute_data_provider'
+  | 'spot_gold_data_provider'
   | 'full_minute_data_provider'
   | 'depth5_data_provider'
   | 'realtime_data_provider'
@@ -2124,10 +2161,11 @@ export interface CapabilityRoute {
   id: string
   label: string
   desc: string
-  field: ProviderField | null                    // null = 不可路由能力 (仅 TickFlow 提供)
+  field: ProviderField | null                    // null = 固定源能力
   default: string
   tf_tier: string                                  // TickFlow 所需最低订阅档位
   tf_available: boolean                            // 当前 TickFlow 档位是否提供该能力
+  tf_supported?: boolean                           // false = TickFlow 不提供，非档位限制
   usable: boolean                                  // 生效源当前能否真正提供 (各页能力门控的统一判定)
   current: string                                  // 原始偏好值
   current_display: string
@@ -2235,6 +2273,7 @@ export interface Preferences {
   adj_factor_provider?: string
   minute_data_provider?: string
   czsc_minute_data_provider?: string
+  spot_gold_data_provider?: string
   /** 全量分钟 (盘中全市场分钟落盘) 生效源; 默认 tickflow (需 Expert 档) */
   full_minute_data_provider?: string
   /** 分钟源 1 分钟历史深度(交易日); null/缺省 = 深历史 (如 tickflow)。分时档位据此收窄 */
@@ -2905,6 +2944,8 @@ export const api = {
     request<KlineDailyLatestResponse>(
       `/api/kline/daily/latest?symbol=${encodeURIComponent(symbol)}`,
     ),
+  spotGoldChart: () => request<SpotGoldChart>('/api/custom/spot-gold/chart', { quiet: true, timeoutMs: 60_000 }),
+  refreshSpotGold: () => request<SpotGoldChart>('/api/custom/spot-gold/refresh', { method: 'POST', quiet: true, timeoutMs: 60_000 }),
   czscChart: (symbol: string, timeframe: CzscTimeframe, assetType?: CzscAssetType) => request<CzscChartResponse>(
     `/api/kline/czsc?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}${assetType ? `&asset_type=${assetType}` : ''}`, { quiet: true },
   ),
@@ -3001,10 +3042,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ symbol, ...(days != null ? { days } : {}) }),
     }),
-  syncCzscMinute: (symbol: string, provider: string, days = 30) =>
+  syncCzscMinute: (symbol: string, provider: string, days = 30, assetType?: CzscAssetType) =>
     request<{ status: string; symbol: string; rows: number; provider: string }>('/api/kline/sync_minute_single', {
       method: 'POST',
-      body: JSON.stringify({ symbol, provider, days, purpose: 'czsc' }),
+      body: JSON.stringify({ symbol, provider, days, purpose: 'czsc', ...(assetType ? { asset_type: assetType } : {}) }),
     }),
   clearMinute: () =>
     request<{ status: string; removed: number }>('/api/kline/clear_minute', {
@@ -4733,9 +4774,10 @@ export interface AnalysisColumn {
 export interface AnalysisMenu {
   id: string
   label: string
+  nav_group?: string | null
   icon: string
   data_source: string
-  template: 'dimension_rank' | 'ranking' | 'table'
+  template: 'dimension_rank' | 'ranking' | 'table' | 'spot_gold'
   dimension_field?: string | null
   rank_field?: string | null
   group_columns: AnalysisColumn[]

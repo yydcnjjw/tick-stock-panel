@@ -553,6 +553,7 @@ class DataProvidersIn(BaseModel):
     adj_factor_provider: str | None = None
     minute_data_provider: str | None = None
     czsc_minute_data_provider: str | None = Field(default=None, pattern=r"^[a-z0-9_-]{1,64}$")
+    spot_gold_data_provider: str | None = Field(default=None, pattern=r"^[a-z0-9_-]{1,64}$")
     full_minute_data_provider: str | None = None
     depth5_data_provider: str | None = None
     realtime_data_provider: str | None = None
@@ -649,6 +650,7 @@ def get_preferences() -> dict:
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "czsc_minute_data_provider": preferences.get_czsc_minute_data_provider(),
+        "spot_gold_data_provider": preferences.get_spot_gold_data_provider(),
         "full_minute_data_provider": preferences.get_full_minute_data_provider(),
         "minute_history_days": _minute_history_days(),
         "depth5_data_provider": preferences.get_depth5_data_provider(),
@@ -737,6 +739,7 @@ def get_capability_matrix() -> dict:
             "daily_data_provider": preferences.get_daily_data_provider(),
             "minute_data_provider": preferences.get_minute_data_provider(),
             "czsc_minute_data_provider": preferences.get_czsc_minute_data_provider(),
+            "spot_gold_data_provider": preferences.get_spot_gold_data_provider(),
             "full_minute_data_provider": preferences.get_full_minute_data_provider(),
             "depth5_data_provider": preferences.get_depth5_data_provider(),
             "adj_factor_provider": preferences.get_adj_factor_provider(),
@@ -954,6 +957,7 @@ def update_data_providers(req: DataProvidersIn, request: Request) -> dict:
         "adj_factor_provider": preferences.get_adj_factor_provider(),
         "minute_data_provider": preferences.get_minute_data_provider(),
         "czsc_minute_data_provider": preferences.get_czsc_minute_data_provider(),
+        "spot_gold_data_provider": preferences.get_spot_gold_data_provider(),
         "full_minute_data_provider": preferences.get_full_minute_data_provider(),
         "depth5_data_provider": preferences.get_depth5_data_provider(),
         "realtime_data_provider": preferences.get_realtime_data_provider(),

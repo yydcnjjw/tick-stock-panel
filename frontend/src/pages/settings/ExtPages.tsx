@@ -6,6 +6,10 @@ import { api, type AnalysisColumn, type AnalysisMenu, type ExtDataConfig, type E
 import { QK } from '@/lib/queryKeys'
 import { Skeleton } from '@/components/data/Skeleton'
 
+const TEMPLATE_LABELS: Record<AnalysisMenu['template'], string> = {
+  dimension_rank: '维度热度榜', ranking: '指标排名榜', table: '明细表', spot_gold: '伦敦金四周期图',
+}
+
 function dtypeToColumnType(dtype: string): AnalysisColumn['type'] {
   return dtype === 'int' || dtype === 'float' ? 'number' : 'string'
 }
@@ -42,14 +46,16 @@ export function SettingsExtPagesPanel() {
   const [editingMenu, setEditingMenu] = useState<AnalysisMenu | null>(null)
   const [id, setId] = useState('')
   const [label, setLabel] = useState('')
+  const [navGroup, setNavGroup] = useState('')
   const [dataSource, setDataSource] = useState('')
-  const [template, setTemplate] = useState<'dimension_rank' | 'ranking' | 'table'>('dimension_rank')
+  const [template, setTemplate] = useState<AnalysisMenu['template']>('dimension_rank')
   const [dimensionField, setDimensionField] = useState('')
   const [rankField, setRankField] = useState('')
   const [selectedColumns, setSelectedColumns] = useState<string[]>([])
   const [error, setError] = useState('')
 
   const activeConfig = configs.find(c => c.id === dataSource) ?? configs[0]
+  const isGold = template === 'spot_gold'
   const fields = activeConfig?.fields ?? []
   const numericFields = useMemo(() => fields.filter(f => f.dtype === 'int' || f.dtype === 'float'), [fields])
 
@@ -58,6 +64,7 @@ export function SettingsExtPagesPanel() {
     setEditingMenu(null)
     setId('')
     setLabel('')
+    setNavGroup('')
     setDataSource(cfg?.id ?? '')
     setTemplate('dimension_rank')
     setDimensionField(firstMatchingField(cfg, ['概念', 'industry', '行业', 'sector']))
@@ -71,6 +78,7 @@ export function SettingsExtPagesPanel() {
     setEditingMenu(menu)
     setId(menu.id)
     setLabel(menu.label)
+    setNavGroup(menu.nav_group ?? '')
     setDataSource(menu.data_source)
     setTemplate(menu.template)
     setDimensionField(menu.dimension_field ?? firstMatchingField(cfg, ['概念', 'industry', '行业', 'sector']))
@@ -83,9 +91,14 @@ export function SettingsExtPagesPanel() {
   const save = useMutation({
     mutationFn: () => {
       const cfg = activeConfig
-      if (!cfg) throw new Error('请选择扩展数据源')
       if (!id.trim()) throw new Error('请输入菜单标识')
       if (!label.trim()) throw new Error('请输入菜单名称')
+      if (isGold) return api.analysisMenuSave(id.trim(), {
+        label: label.trim(), nav_group: navGroup.trim() || null, icon: 'chart', data_source: 'spot_gold', template,
+        dimension_field: null, rank_field: null, group_columns: [], detail_columns: [], default_sort: null,
+        visible: editingMenu?.visible ?? true, order: editingMenu?.order ?? menuItems.length + 100,
+      })
+      if (!cfg) throw new Error('请选择扩展数据源')
       if (template === 'dimension_rank' && !dimensionField) throw new Error('请选择分组字段')
       if (template === 'ranking' && !rankField) throw new Error('请选择排名字段')
 
@@ -103,6 +116,7 @@ export function SettingsExtPagesPanel() {
 
       return api.analysisMenuSave(id.trim(), {
         label: label.trim(),
+        nav_group: navGroup.trim() || null,
         icon: template === 'dimension_rank' ? 'tags' : 'chart',
         data_source: cfg.id,
         template,
@@ -115,7 +129,8 @@ export function SettingsExtPagesPanel() {
         order: editingMenu?.order ?? menuItems.length + 100,
       })
     },
-    onSuccess: () => {
+    onSuccess: saved => {
+      qc.setQueryData(QK.analysisMenu(saved.id), saved)
       qc.invalidateQueries({ queryKey: QK.analysisMenus })
       setShowForm(false)
       resetForm()
@@ -125,7 +140,10 @@ export function SettingsExtPagesPanel() {
 
   const del = useMutation({
     mutationFn: api.analysisMenuDelete,
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.analysisMenus }),
+    onSuccess: (_result, menuId) => {
+      qc.removeQueries({ queryKey: QK.analysisMenu(menuId), exact: true })
+      qc.invalidateQueries({ queryKey: QK.analysisMenus })
+    },
   })
 
   return (
@@ -134,9 +152,9 @@ export function SettingsExtPagesPanel() {
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>
             <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">扩展页面</div>
-            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">把扩展数据配置成左侧分析菜单</h2>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">用模板创建独立分析页面</h2>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
-              选择扩展数据源、分析模板、分组字段和列表列后，系统会生成一个可访问的动态分析页面。
+              选择分析模板并保存后，页面会出现在左侧菜单。表格模板使用扩展数据，伦敦金模板支持四个周期切换查看 K 线与缠论结构。
             </p>
           </div>
           <button
@@ -178,7 +196,7 @@ export function SettingsExtPagesPanel() {
             </label>
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">扩展数据源</span>
-              <select
+              {isGold ? <div className="flex min-h-9 items-center rounded-btn border border-border bg-base px-3 py-2 text-xs text-secondary">伦敦金行情 · 在数据源设置中选择提供方</div> : <select
                 value={dataSource || activeConfig?.id || ''}
                 onChange={e => {
                   const cfg = configs.find(c => c.id === e.target.value)
@@ -190,36 +208,49 @@ export function SettingsExtPagesPanel() {
                 className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground"
               >
                 {configs.map(cfg => <option key={cfg.id} value={cfg.id}>{cfg.label}</option>)}
-              </select>
+              </select>}
             </label>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="space-y-1.5">
               <span className="text-[11px] text-muted">模板</span>
-              <select value={template} onChange={e => setTemplate(e.target.value as any)} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
-                <option value="dimension_rank">维度热度榜</option>
-                <option value="ranking">指标排名榜</option>
-                <option value="table">明细表</option>
+              <select value={template} onChange={e => {
+                const next = e.target.value as AnalysisMenu['template']
+                setTemplate(next)
+                if (next === 'spot_gold' && !navGroup.trim()) setNavGroup('商品行情')
+              }} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground">
+                {Object.entries(TEMPLATE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
             </label>
-            <label className="space-y-1.5">
+            {!isGold && <label className="space-y-1.5">
               <span className="text-[11px] text-muted">分组字段</span>
               <select value={dimensionField} onChange={e => setDimensionField(e.target.value)} disabled={template !== 'dimension_rank'} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground disabled:opacity-50">
                 <option value="">请选择</option>
                 {fields.map(f => <option key={f.name} value={f.name}>{f.label || f.name}</option>)}
               </select>
-            </label>
-            <label className="space-y-1.5">
+            </label>}
+            {!isGold && <label className="space-y-1.5">
               <span className="text-[11px] text-muted">排名字段</span>
               <select value={rankField} onChange={e => setRankField(e.target.value)} disabled={template !== 'ranking'} className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground disabled:opacity-50">
                 <option value="">请选择</option>
                 {numericFields.map(f => <option key={f.name} value={f.name}>{f.label || f.name}</option>)}
               </select>
-            </label>
+            </label>}
           </div>
 
-          <div>
+          <label className="block space-y-1.5">
+            <span className="text-[11px] text-muted">菜单分组</span>
+            <input aria-label="菜单分组" value={navGroup} onChange={e => setNavGroup(e.target.value)} maxLength={64}
+              list="extension-nav-groups" placeholder="留空为一级菜单，如 商品行情"
+              className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground" />
+            <datalist id="extension-nav-groups">
+              {[...new Set(menuItems.map(m => m.nav_group?.trim()).filter(Boolean))].map(group => <option key={group} value={group} />)}
+            </datalist>
+            <span className="block text-[11px] text-muted">填写相同分组的页面会归入同一个上级菜单，留空则独立显示。</span>
+          </label>
+
+          {isGold ? <p className="text-xs leading-6 text-muted">默认显示日线，可切换周线、4 小时和 1 小时；参考 chan.py 结构图展示分型、笔、线段、中枢、均线与 MACD，支持手动刷新。</p> : <div>
             <div className="text-[11px] text-muted mb-2">列表列配置</div>
             <div className="flex flex-wrap gap-2">
               {fields.filter(f => !['symbol', 'code'].includes(f.name)).map(f => {
@@ -235,7 +266,7 @@ export function SettingsExtPagesPanel() {
                 )
               })}
             </div>
-          </div>
+          </div>}
 
           {error && <div className="rounded-btn border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
@@ -272,10 +303,11 @@ export function SettingsExtPagesPanel() {
               </div>
             </div>
             <div className="mt-3 space-y-1 text-[11px] text-secondary">
-              <div>数据源：<span className="font-mono text-muted">{menu.data_source}</span></div>
-              <div>模板：{menu.template}</div>
+              <div>数据源：<span className="text-muted">{menu.template === 'spot_gold' ? '伦敦金行情' : menu.data_source}</span></div>
+              <div>模板：{TEMPLATE_LABELS[menu.template]}</div>
+              {menu.nav_group && <div>菜单：{menu.nav_group} → {menu.label}</div>}
               {menu.dimension_field && <div>分组字段：{menu.dimension_field}</div>}
-              <div>列表列：{menu.detail_columns.length} 个</div>
+              {menu.template === 'spot_gold' ? <div>周期：周线 / 日线 / 4 小时 / 1 小时</div> : <div>列表列：{menu.detail_columns.length} 个</div>}
             </div>
             <Link to={`/analysis/${menu.id}`} className="mt-4 inline-flex w-full items-center justify-center gap-1.5 rounded-btn border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-border/30 transition-colors">
               <ExternalLink className="h-3.5 w-3.5" />

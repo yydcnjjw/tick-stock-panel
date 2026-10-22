@@ -1,0 +1,7 @@
+name: sina_gold
+display_name: 新浪伦敦金
+runtime: none
+entry: app.plugins.sina_gold.provider:SinaGoldProvider
+datasets: [spot_gold]
+description: 伦敦金现货 CFD 的日线、4小时、1小时参考报价；美元/金衡盎司，仅用于独立黄金图表。
+homepage: https://finance.sina.com.cn/futures/quotes/XAU.shtml

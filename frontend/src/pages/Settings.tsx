@@ -66,15 +66,22 @@ export function Settings() {
 
   return (
     <>
-      <PageHeader
+      <div className="pl-10 md:pl-0"><PageHeader
         title="设置"
         subtitle="管理账户、数据刷新策略和高级功能配置。"
-      />
+      /></div>
 
-      <div className="px-8 py-6">
-        <div className="flex gap-6 items-stretch">
+      <div className="px-3 py-4 md:px-8 md:py-6">
+        <div className="flex flex-col gap-4 items-stretch md:flex-row md:gap-6">
+          <label className="space-y-2 text-xs text-muted md:hidden">
+            <span>设置分类</span>
+            <select aria-label="设置分类" value={activeTab.key} onChange={e => setSearchParams({ tab: e.target.value }, { replace: true })}
+              className="block h-10 w-full rounded-btn border border-border bg-surface px-3 text-sm text-foreground">
+              {TABS.map(tab => <option key={tab.key} value={tab.key}>{tab.label}</option>)}
+            </select>
+          </label>
           {/* ===== 竖向 Tab 侧栏 ===== */}
-          <nav className={cn('shrink-0 transition-all duration-200 ease-smooth', collapsed ? 'w-10' : 'w-36')}>
+          <nav className={cn('hidden md:block shrink-0 transition-all duration-200 ease-smooth', collapsed ? 'w-10' : 'w-36')}>
             <div className="flex flex-col gap-0.5 justify-center min-h-[60vh] sticky top-6">
               {/* 收起/展开 按钮 */}
               <button

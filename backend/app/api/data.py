@@ -506,7 +506,7 @@ def _compute_storage(data_dir: Path) -> dict:
         stats[f"{key}_size_mb"] = sz
 
     # total: 再加上其他零散目录 (financials 有下方专属明细统计, 不在此列)
-    other_dirs = ["pools", "backtest_results", "screener_results", "ai_cache"]
+    other_dirs = ["pools", "backtest_results", "screener_results", "ai_cache", "kline_czsc_etf_minute"]
     for name in other_dirs:
         d = data_dir / name
         if d.exists():
@@ -633,6 +633,7 @@ def clear_data(request: Request):
     for sub in (
         "kline_daily", "kline_daily_enriched", "kline_index_daily", "kline_index_enriched",
         "kline_etf_daily", "kline_etf_enriched", "kline_etf_minute", "kline_minute",
+        "kline_czsc_etf_minute",
         "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "pools", "financials",
         "backtest_results", "screener_results", "ai_cache",
     ):

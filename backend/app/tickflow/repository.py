@@ -1576,14 +1576,14 @@ class KlineRepository:
         self, symbol: str, end: date, limit: int, columns: list[str],
         *, asset_type: str = "stock",
     ) -> pl.DataFrame:
-        """读取股票或指数落盘 enriched 尾部, 不覆盖盘中缓存, 不过滤坏行。
+        """读取股票、ETF 或指数落盘 enriched 尾部, 不覆盖盘中缓存, 不过滤坏行。
 
         行数以实际记录计; 调用方通过发布 generation 或指数分区指纹校验读取一致性。
         读失败直接抛出, 避免把损坏数据伪装成无数据。
         """
-        if asset_type not in {"stock", "index"}:
-            raise ValueError("图表日线快照仅支持股票和指数")
-        root = self.store.data_dir / ("kline_index_enriched" if asset_type == "index" else "kline_daily_enriched")
+        if asset_type not in {"stock", "etf", "index"}:
+            raise ValueError("图表日线快照仅支持股票、ETF 和指数")
+        root = self.store.data_dir / ("kline_index_enriched" if asset_type == "index" else enriched_dirname(asset_type))
         if not any(root.glob("**/*.parquet")):
             return pl.DataFrame()
         lf = scan_enriched_parquet(
@@ -1600,23 +1600,26 @@ class KlineRepository:
                  for path in sorted(root.glob("**/*.parquet"))]
         return hashlib.sha256(repr(parts).encode()).hexdigest()
 
-    def minute_chart_root(self, provider: str | None = None) -> Path:
+    def minute_chart_root(self, provider: str | None = None, *, asset_type: str = "stock") -> Path:
         """显式来源只读写 CZSC 隔离目录, 不进入普通分钟的递归扫描。"""
+        if asset_type not in {"stock", "etf"}:
+            raise ValueError("图表分钟快照仅支持股票和 ETF")
         if provider is None:
-            return self.store.data_dir / "kline_minute"
+            return self.store.data_dir / ("kline_etf_minute" if asset_type == "etf" else "kline_minute")
         if not provider or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in provider):
             raise ValueError("分钟数据源名称不符合要求")
-        return self.store.data_dir / "kline_czsc_minute" / provider
+        directory = "kline_czsc_etf_minute" if asset_type == "etf" else "kline_czsc_minute"
+        return self.store.data_dir / directory / provider
 
-    def get_minute_chart_generation(self, *, provider: str | None = None) -> str:
+    def get_minute_chart_generation(self, *, provider: str | None = None, asset_type: str = "stock") -> str:
         """分钟图表只读版本: 复用分区修改指纹, 不初始化或写入版本文件。"""
-        return self._chart_partition_generation(self.minute_chart_root(provider))
+        return self._chart_partition_generation(self.minute_chart_root(provider, asset_type=asset_type))
 
     def get_minute_published(
-        self, symbol: str, end: datetime, limit: int, *, provider: str | None = None,
+        self, symbol: str, end: datetime, limit: int, *, provider: str | None = None, asset_type: str = "stock",
     ) -> pl.DataFrame:
-        """股票图表的有界分钟快照; 保留坏行且让读取错误上抛, 不混入实时内存。"""
-        root = self.minute_chart_root(provider)
+        """股票或 ETF 的有界分钟快照; 保留坏行且让读取错误上抛, 不混入实时内存。"""
+        root = self.minute_chart_root(provider, asset_type=asset_type)
         if not any(root.glob("**/*.parquet")):
             return pl.DataFrame()
         lf = pl.scan_parquet(str(root / "**" / "*.parquet")).select(

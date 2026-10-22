@@ -11,11 +11,12 @@ import {
   Users,
 } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
-import { api, type AnalysisColumn, type ExtDataConfig, type ExtDataField } from '@/lib/api'
+import { api, type AnalysisColumn, type AnalysisMenu, type ExtDataConfig, type ExtDataField } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 
 interface DimensionAnalysisProps {
   menuId?: string
+  menu?: AnalysisMenu
   title?: string
   subtitle?: string
   kindLabel?: string
@@ -147,6 +148,7 @@ function aggregate(rows: Record<string, any>[], col: AnalysisColumn) {
 
 export function ExtDimensionAnalysis({
   menuId,
+  menu: suppliedMenu,
   title,
   subtitle,
   kindLabel = '维度',
@@ -159,9 +161,9 @@ export function ExtDimensionAnalysis({
   const menuQuery = useQuery({
     queryKey: QK.analysisMenu(menuId ?? ''),
     queryFn: () => api.analysisMenu(menuId!),
-    enabled: !!menuId,
+    enabled: !!menuId && !suppliedMenu,
   })
-  const menu = menuQuery.data
+  const menu = suppliedMenu ?? menuQuery.data
 
   const [selectedConfigId, setSelectedConfigId] = useState('')
   const [dimensionField, setDimensionField] = useState('')

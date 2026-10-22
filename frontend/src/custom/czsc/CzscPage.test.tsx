@@ -12,8 +12,8 @@ import { storage } from '@/lib/storage'
 const fixture = vi.hoisted(() => ({ requests: [] as { symbol: string; timeframe: string; assetType?: string; resolve: (data: any) => void; reject: (error: Error) => void }[], syncCzscMinute: vi.fn(), provider: 'exchange_minute' as string | undefined, usable: true }))
 vi.mock('@/lib/api', () => ({ api: { czscChart: (symbol: string, timeframe: string, assetType?: string) => new Promise((resolve, reject) => fixture.requests.push({ symbol, timeframe, assetType, resolve, reject })), syncCzscMinute: fixture.syncCzscMinute } }))
 vi.mock('@/lib/useSharedQueries', () => ({ useCapabilityMatrix: () => ({ data: { capabilities: [{ id: 'czsc_minute', effective: fixture.provider, effective_display: fixture.provider, usable: fixture.usable }] } }) }))
-vi.mock('@/components/financials/StockFinancialSearch', () => ({ StockFinancialSearch: ({ onSelect, assetTypes }: any) => <div data-search-assets={assetTypes}><button onClick={() => onSelect('600001.SH')}>切股</button><button onClick={() => onSelect('000300.SH', '沪深300', 'index')}>切指数</button></div> }))
-vi.mock('@/components/EChartsCandlestick', () => ({ EChartsCandlestick: ({ data, structures, movingAverages, onDateClick }: any) => <button data-chart data-ma={JSON.stringify(movingAverages)} data-structures={JSON.stringify(structures)} onClick={() => onDateClick(data[0].date)}>{data[0].close}|笔{structures.segments.length}</button> }))
+vi.mock('@/components/financials/StockFinancialSearch', () => ({ StockFinancialSearch: ({ onSelect, assetTypes }: any) => <div data-search-assets={assetTypes}><button onClick={() => onSelect('600001.SH')}>切股</button><button onClick={() => onSelect('000300.SH', '沪深300', 'index')}>切指数</button><button onClick={() => onSelect('510300.SH', '沪深300ETF', 'etf')}>切ETF</button></div> }))
+vi.mock('@/components/EChartsCandlestick', () => ({ EChartsCandlestick: ({ data, structures, movingAverages, onDateClick, viewport }: any) => <button data-chart data-viewport={JSON.stringify(viewport)} data-count={data.length} data-ma={JSON.stringify(movingAverages)} data-structures={JSON.stringify(structures)} onClick={() => onDateClick(data[0].date)}>{data[0].close}|笔{structures.segments.length}</button> }))
 
 let host: HTMLDivElement, root: Root, client: QueryClient
 beforeEach(() => {
@@ -37,7 +37,51 @@ async function mount(entry = "/czsc?symbol=600000.SH") {
   await act(async () => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[entry]}><CzscPage /><Location /></MemoryRouter></QueryClientProvider>))
 }
 const tick = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) }) }
-const ready = (symbol: string, close: number) => ({ minute_provider: fixture.provider, symbol, name: symbol, status: 'ready', cutoff: '2024-01-02', version: '1.0.1', rows: [{ date: '2024-01-02', open: close, high: close, low: close, close, volume: 10 }], strokes: [{ start: '2024-01-01', end: '2024-01-02', start_price: close - 1, end_price: close }], signals: [] })
+const ready = (symbol: string, close: number) => ({ asset_type: 'stock', minute_provider: fixture.provider, symbol, name: symbol, status: 'ready', cutoff: '2024-01-02', version: '1.0.1', rows: [{ date: '2024-01-02', open: close, high: close, low: close, close, volume: 10 }], strokes: [{ start: '2024-01-01', end: '2024-01-02', start_price: close - 1, end_price: close }], signals: [] })
+
+async function setRangeInput(label: string, value: string) {
+  await act(async () => {
+    const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+}
+
+it('locates a range without requesting or slicing rows, retains it across symbols and resets', async () => {
+  await mount()
+  const value = ready('600000.SH', 10)
+  const data = { ...value, rows: [value.rows[0], { ...value.rows[0], date: '2024-01-03' }] }
+  fixture.requests[0].resolve(data); await tick()
+  await setRangeInput('区间开始', '2024-01-02'); await setRangeInput('区间结束', '2024-01-02')
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '应用')!.click())
+  expect(host.querySelector('[data-chart]')?.getAttribute('data-viewport')).toBe('{"startValue":0,"endValue":0}')
+  expect(host.querySelector('[data-chart]')?.getAttribute('data-count')).toBe('2')
+  expect(fixture.requests).toHaveLength(1)
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '切股')!.click())
+  fixture.requests[1].resolve({ ...ready('600001.SH', 20), rows: [{ ...value.rows[0], date: '2025-01-01' }] }); await tick()
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="区间开始"]')?.value).toBe('2024-01-02')
+  expect(host.querySelector('[data-chart]')).toBeNull()
+  expect(host.textContent).toContain('该区间没有已加载的 K 线')
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '重置')!.click())
+  expect(host.querySelector('[data-chart]')?.getAttribute('data-viewport')).toBe('{"reset":true}')
+  expect(fixture.requests).toHaveLength(2)
+})
+
+it('searches ETFs, retains the minute period and synchronizes with ETF identity', async () => {
+  fixture.syncCzscMinute.mockResolvedValue({ status: 'ok', rows: 30 })
+  await mount('/czsc?symbol=600000.SH&timeframe=30m')
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '切ETF')!.click())
+  expect(fixture.requests[1]).toMatchObject({ symbol: '510300.SH', assetType: 'etf', timeframe: '30m' })
+  fixture.requests[1].resolve({ asset_type: 'etf', status: 'empty', minute_provider: fixture.provider, reason: '暂无分钟数据' }); await tick()
+  await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '同步分钟数据')!.click())
+  await tick()
+  expect(fixture.syncCzscMinute).toHaveBeenCalledWith('510300.SH', 'exchange_minute', 30, 'etf')
+  expect(fixture.requests[2]).toMatchObject({ symbol: '510300.SH', assetType: 'etf', timeframe: '30m' })
+  for (const label of ['1分', '5分', '30分', '日线', '周线']) {
+    expect([...host.querySelectorAll('button')].find(b => b.textContent === label)?.disabled).toBe(false)
+  }
+})
 
 it('ignores late responses for a previous symbol and layer toggles do not refetch', async () => {
   await mount()
@@ -145,12 +189,15 @@ it('synchronizes the selected stock and reloads the minute chart', async () => {
   const invalidate = vi.spyOn(client, 'invalidateQueries')
   fixture.syncCzscMinute.mockResolvedValue({ status: 'ok', rows: 240 })
   await mount('/czsc?symbol=600000.SH&timeframe=30m')
-  fixture.requests[0].resolve({ status: 'empty', minute_provider: fixture.provider, reason: '暂无分钟数据' }); await tick()
+  fixture.requests[0].resolve({ asset_type: 'stock', status: 'empty', minute_provider: fixture.provider, reason: '暂无分钟数据' }); await tick()
   await act(async () => [...host.querySelectorAll('button')].find(b => b.textContent === '同步分钟数据')!.click())
   await tick()
-  expect(fixture.syncCzscMinute).toHaveBeenCalledWith('600000.SH', 'exchange_minute', 30)
+  expect(fixture.syncCzscMinute).toHaveBeenCalledWith('600000.SH', 'exchange_minute', 30, 'stock')
   expect(invalidate.mock.calls.map(([arg]) => arg?.queryKey)).toEqual(
-    ['1m', '5m', '30m'].map(period => QK.czscChart('600000.SH', period as '1m' | '5m' | '30m', 'exchange_minute')),
+    ['1m', '5m', '30m'].flatMap(period => [
+      QK.czscChart('600000.SH', period as '1m' | '5m' | '30m', 'exchange_minute', 'stock'),
+      QK.czscChart('600000.SH', period as '1m' | '5m' | '30m', 'exchange_minute'),
+    ]),
   )
   expect(fixture.requests).toHaveLength(2)
   fixture.requests[1].resolve(ready('600000.SH', 30)); await tick()
@@ -209,7 +256,7 @@ it('does not display a previous stock sync failure after changing stock', async 
 it('opens an index weekly chart with typed URL and only enables supported periods', async () => {
   await mount('/czsc?symbol=000300.SH&asset_type=index&timeframe=1w')
   expect(fixture.requests[0]).toMatchObject({ symbol: '000300.SH', timeframe: '1w', assetType: 'index' })
-  expect(host.querySelector('[data-search-assets]')?.getAttribute('data-search-assets')).toBe('stock,index')
+  expect(host.querySelector('[data-search-assets]')?.getAttribute('data-search-assets')).toBe('stock,etf,index')
   for (const label of ['1分', '5分', '30分']) {
     expect([...host.querySelectorAll('button')].find(b => b.textContent === label)?.disabled).toBe(true)
   }
@@ -259,7 +306,7 @@ it('shows an index without history and links to data management without syncing'
 
 
 it('rejects an invalid asset URL without requesting or manually refreshing a different asset', async () => {
-  await mount('/czsc?symbol=000300.SH&asset_type=etf')
+  await mount('/czsc?symbol=000300.SH&asset_type=invalid')
   expect(host.textContent).toContain('资产类型无效')
   expect(fixture.requests).toHaveLength(0)
   expect([...host.querySelectorAll('button')].find(b => b.textContent === '刷新')?.disabled).toBe(true)

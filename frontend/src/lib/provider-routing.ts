@@ -6,6 +6,7 @@ export const DEFAULT_ROUTING: Record<ProviderField, string> = {
   adj_factor_provider: 'tickflow',
   minute_data_provider: 'tickflow',
   czsc_minute_data_provider: 'exchange_minute',
+  spot_gold_data_provider: 'sina_gold',
   full_minute_data_provider: 'tickflow',
   depth5_data_provider: 'tickflow',
   realtime_data_provider: 'tickflow',

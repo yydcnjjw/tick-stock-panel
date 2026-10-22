@@ -587,7 +587,7 @@ function CapabilityChips({ caps, servingSet, isTickFlow, paid = false }: {
             {servingNow
               ? <Check className="h-2.5 w-2.5" />
               : locked ? <Lock className="h-2.5 w-2.5" /> : null}
-            {DATASET_LABEL[cap.id] || cap.id}
+            {DATASET_LABEL[cap.id] || cap.label}
             {paid && (
               <span className="ml-0.5 rounded bg-warning/15 px-1 py-px text-[9px] font-medium leading-none text-warning">积分</span>
             )}
@@ -636,6 +636,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
     realtime: prefs.data?.realtime_data_provider || 'tickflow',
     depth5: prefs.data?.depth5_data_provider || 'tickflow',
     financial: prefs.data?.financial_data_provider || 'tickflow',
+    spot_gold: prefs.data?.spot_gold_data_provider || 'sina_gold',
   }
   const servingDatasets = (name: string) =>
     Object.entries(effProvider).filter(([, v]) => v === name).map(([k]) => k)
@@ -788,7 +789,7 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
             const declared = new Set(item.datasets)
             // TickFlow 展示注册表全量能力 (含档位锁定态); 其余源按声明过滤
             const chipCaps = isTf
-              ? matrixCaps
+              ? matrixCaps.filter(c => c.tf_supported !== false)
               : matrixCaps.filter(c => declared.has(c.id))
             return (
               <div
@@ -1124,7 +1125,7 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet }: {
 /** TickFlow 详情: 介绍 + 能力档位表 + Key/可用功能左右两栏。
  *  检测档位集群 (档位徽章 + ? 说明 + 重新检测 + 可用功能悬停) 挂在 API Key 标题行右侧。 */
 function TickFlowDetail({ active, matrix }: { active: boolean; matrix?: CapabilityMatrix }) {
-  const caps = matrix?.capabilities ?? []
+  const caps = (matrix?.capabilities ?? []).filter(c => c.tf_supported !== false)
   const tier = matrix?.tickflow_tier
   const { data: tfCaps } = useCapabilities()
   const capEntries = tfCaps ? Object.entries(tfCaps.capabilities) : []

@@ -18,6 +18,7 @@
 - 自定义、AI 和叠加策略目录：`data/strategies/`。策略与信号已全面去内置化——无内置策略目录，新装环境策略库为空（默认信号定义由种子自动种入；旧版本升级用户自动补回原内置策略、失效策略文件自动迁移归档）。策略参数类型支持 `float/int/bool/select/date/string`；每策略可配「叠加条件」（`overlay_filter`，存于策略 override）：字段+运算符+值的多行 AND 硬过滤，选股/回测/监控三处一致生效，不改策略代码。
 - 数据源 Provider 与 `plugin.yaml` 机制：详见 [`plugin-development.md`](plugin-development.md)。
 - 扩展数据与声明式分析页面：适合不需要自定义 React 交互的页面。
+- 扩展页面支持 `spot_gold` 伦敦金图表模板及可选 `nav_group` 菜单分组；分组为空时保留一级菜单，详见 [`spot-gold.md`](spot-gold.md)。
 - 前端源码扩展注册：`frontend/src/custom/<namespace>/extension.tsx`，支持静态页面、导航和已开放插槽。
 - 后端源码扩展注册：`backend/app/custom/<module>.py`，支持 FastAPI 路由、启动钩子和通知格式化器。
 - 当前前端插槽：`layout.navigation.extra`、`stock-preview.footer`、`watchlist.toolbar`。

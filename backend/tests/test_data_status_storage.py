@@ -59,3 +59,8 @@ def test_missing_dirs_contribute_zero(tmp_path):
     assert stats.get("financials_files", 0) == 0
     assert stats.get("financials_size_mb", 0.0) == 0.0
     assert stats["total_size_mb"] == 1.0
+
+
+def test_etf_czsc_minutes_are_included_once(tmp_path):
+    _write_mb(tmp_path / 'kline_czsc_etf_minute' / 'exchange_minute' / 'part.parquet', 1.0)
+    assert _compute_storage(tmp_path)['total_size_mb'] == 1.0

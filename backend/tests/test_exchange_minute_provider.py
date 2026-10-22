@@ -82,3 +82,18 @@ def test_network_failure_propagates():
             provider.get_minute(["600276.SH"], None, None)
     finally:
         provider.close()
+
+
+def test_etf_minute_uses_etf_asset_and_standard_units():
+    requests = []
+    provider = provider_with_payload({'code': '510300', 'kline': [
+        [20260917093100, 4.0, 4.1, 3.9, 4.0, 1200, 4800],
+    ]}, requests)
+    try:
+        frame = provider.get_minute(['510300.SH'], None, None, asset_type='etf')
+    finally:
+        provider.close()
+    assert frame['symbol'].to_list() == ['510300.SH']
+    assert frame['volume'].to_list() == [12.0]
+    assert frame['close'].to_list() == [4.0]
+    assert requests[0].url.path == '/v1/sh1/mink/510300'

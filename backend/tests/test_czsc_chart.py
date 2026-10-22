@@ -123,16 +123,16 @@ class Repo:
         return self.generation
 
     def get_daily_published(self, symbol, end, limit, columns, *, asset_type="stock"):
-        assert asset_type == "stock"
+        assert asset_type == self.resolve_asset_type(symbol)
         self.reads += 1
         if self.change_during_read:
             self.generation += "x"
         return self.frame.filter(pl.col("date") <= end).tail(limit)
 
-    def get_minute_chart_generation(self, *, provider=None):
+    def get_minute_chart_generation(self, *, provider=None, asset_type="stock"):
         return self.generation
 
-    def get_minute_published(self, symbol, end, limit, *, provider=None):
+    def get_minute_published(self, symbol, end, limit, *, provider=None, asset_type="stock"):
         self.reads += 1
         if self.change_during_read:
             self.generation += "x"
@@ -162,7 +162,7 @@ def test_api_errors_empty_and_optional_dependency(history, monkeypatch):
     app.state.repo = Repo(history)
     client = TestClient(app)
     url = "/api/kline/czsc-daily"
-    assert client.get(url, params={"symbol": "510300.SH"}).status_code == 400
+    assert client.get(url, params={"symbol": "510300.SH"}).json()["asset_type"] == "etf"
     assert client.get(url, params={"symbol": "../../foo"}).status_code == 422
     ok = client.get(url, params={"symbol": "600000.SH"})
     assert ok.status_code == 200
@@ -204,7 +204,7 @@ def test_multi_period_api_cache_revision_and_minute_close_boundary():
     client = TestClient(app)
     assert client.get("/api/kline/czsc", params={"symbol": "600000.SH", "timeframe": "30m"}).json()["timeframe"] == "30m"
     assert client.get("/api/kline/czsc", params={"symbol": "600000.SH", "timeframe": "3m"}).status_code == 422
-    assert client.get("/api/kline/czsc", params={"symbol": "510300.SH", "timeframe": "1m"}).status_code == 400
+    assert client.get("/api/kline/czsc", params={"symbol": "510300.SH", "timeframe": "1m"}).json()["asset_type"] == "etf"
     app.state.repo = Repo(frame.clear())
     assert client.get("/api/kline/czsc", params={"symbol": "600000.SH", "timeframe": "1m"}).json()["status"] == "empty"
 

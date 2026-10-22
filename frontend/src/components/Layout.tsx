@@ -68,6 +68,7 @@ import { toggleTheme, useTheme } from '@/lib/theme'
 import { setCurrentTotal as setAlertTotal, useUnreadAlerts } from '@/lib/monitorBadge'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
 import { getFrontendExtensionNavigation } from '@/extensions/registry'
+import { groupNavigation, NavigationGroup } from './NavigationGroup'
 
 // 品牌色 — 只用于 logo / brand 区域,不影响功能语义色
 const BRAND = '#8B5CF6'
@@ -569,10 +570,10 @@ export function Layout() {
   type NavIcon = (props: BrandIconProps) => ReactNode
   // arch: 'ext' = 扩展域页面 (官方扩展/自定义分析), 核心域 nav 常量不带标。
   // 与菜单设置 ARCH_CLASS 同口径: nav 常量 8 项全部核心, 其余两个来源全部扩展。
-  type NavItem = { to: string; label: string; icon: NavIcon; badge?: string; arch?: 'core' | 'ext' }
+  type NavItem = { to: string; label: string; icon: NavIcon; badge?: string; arch?: 'core' | 'ext'; navGroup?: string }
   const analysisNav: NavItem[] = (analysisMenus?.items ?? [])
     .filter(m => m.visible)
-    .map(m => ({ to: `/analysis/${m.id}`, label: m.label, icon: m.icon === 'tags' ? Tags : BarChart3, arch: 'ext' as const }))
+    .map(m => ({ to: `/analysis/${m.id}`, label: m.label, icon: m.icon === 'tags' ? Tags : BarChart3, arch: 'ext' as const, navGroup: m.nav_group ?? undefined }))
   const extensionNav: NavItem[] = getFrontendExtensionNavigation().map(item => ({
     to: item.route.path,
     label: item.label,
@@ -792,7 +793,9 @@ export function Layout() {
         </div>
 
         <nav className="tf-nav-scroll flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-0.5">
-          {visibleNavItems.map(({ to, label, icon: Icon, badge, arch }) => {
+          {groupNavigation(visibleNavItems).map(entry => {
+            if (entry.kind === 'group') return <NavigationGroup key={`group:${entry.label}`} label={entry.label} items={entry.items} railMode={railMode} />
+            const { to, label, icon: Icon, badge, arch } = entry.item
             // 「自选」项 — 开启分组侧栏且未整体收起时, 渲染为可展开父项 + 二级分组
             const isWatchlistExpandable = to === '/watchlist' && groupsInNav && !railMode && watchlistGroups.length > 0
             return (

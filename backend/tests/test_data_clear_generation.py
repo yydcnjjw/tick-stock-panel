@@ -61,8 +61,10 @@ def test_clear_data_bumps_enriched_generations_and_invalidates_panel_cache(
     repo = _RepoStub(tmp_path)
     stock_file = tmp_path / "kline_daily_enriched" / "date=2026-08-14" / "part.parquet"
     etf_file = tmp_path / "kline_etf_enriched" / "date=2026-08-14" / "part.parquet"
+    etf_minute = tmp_path / 'kline_czsc_etf_minute' / 'exchange_minute' / 'date=2026-08-14' / 'part.parquet'
     _write_parquet_placeholder(stock_file)
     _write_parquet_placeholder(etf_file)
+    _write_parquet_placeholder(etf_minute)
     stock_before = get_enriched_generation(tmp_path, "stock")
     etf_before = get_enriched_generation(tmp_path, "etf")
 
@@ -80,9 +82,10 @@ def test_clear_data_bumps_enriched_generations_and_invalidates_panel_cache(
     etf_after = get_enriched_generation(tmp_path, "etf")
     cached_after = cache.get_or_compute(*cache_args, compute, "stock", stock_after)
 
-    assert result == {"deleted_files": 2}
+    assert result == {"deleted_files": 3}
     assert not stock_file.exists()
     assert not etf_file.exists()
+    assert not etf_minute.exists()
     assert stock_after != stock_before
     assert etf_after != etf_before
     assert cached_after["value"].item() == 2

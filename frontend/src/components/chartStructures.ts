@@ -10,6 +10,7 @@ export interface ChartSegment {
   dashed?: boolean
 }
 export interface ChartBox {
+  dashed?: boolean
   color?: string
   borderColor?: string
   start: string
@@ -58,7 +59,7 @@ export function structureSeries(layers: ChartStructures | undefined, dates: Map<
     markArea: { silent: true, animation: false, itemStyle: { color: 'rgba(139,92,246,0.13)',
       borderColor: 'rgba(139,92,246,0.65)', borderWidth: 1 },
       label: { show: false },
-      data: boxes.map(b => [{ xAxis: b.start, yAxis: b.low, itemStyle: { color: b.color ?? 'rgba(139,92,246,0.13)', borderColor: b.borderColor ?? 'rgba(139,92,246,0.65)' } }, { xAxis: b.end, yAxis: b.high }]),
+      data: boxes.map(b => [{ xAxis: b.start, yAxis: b.low, itemStyle: { color: b.color ?? 'rgba(139,92,246,0.13)', borderColor: b.borderColor ?? 'rgba(139,92,246,0.65)', borderType: b.dashed ? 'dashed' : 'solid' } }, { xAxis: b.end, yAxis: b.high }]),
     },
   })
   const points = (layers.points ?? []).filter(p => dates.has(p.date) && Number.isFinite(p.price))

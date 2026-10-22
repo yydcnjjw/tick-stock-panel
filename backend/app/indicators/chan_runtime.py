@@ -34,7 +34,7 @@ BSP_LABELS = {"1": "一类", "1p": "盘整背驰", "2": "二类", "2s": "类二"
 
 
 def label_time(value, timeframe):
-    return value.isoformat(timespec="minutes") if isinstance(value, datetime) and timeframe.endswith("m") else value.strftime("%Y-%m-%d")
+    return value.isoformat(timespec="minutes") if isinstance(value, datetime) and timeframe.endswith(("m", "h")) else value.strftime("%Y-%m-%d")
 
 
 class ChanReplay:
