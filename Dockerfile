@@ -1,6 +1,7 @@
 # 两阶段构建:前端 dist 拷进后端镜像,单容器运行
 # 可选:构建网络无法直连官方源时,传入 --build-arg USE_CN_MIRROR=1 启用国内镜像
 ARG USE_CN_MIRROR=1
+ARG INCLUDE_STOCKSDK=0
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 # 备用 PyPI 源:主源同步延迟/故障时自动兜底(阿里云与清华互为补充)
@@ -25,6 +26,25 @@ RUN pnpm install --frozen-lockfile || pnpm install
 COPY frontend/ ./
 RUN pnpm build
 
+# === Stage 1b: stock-sdk 插件依赖(可选,默认跳过) ===
+# ⚠️ 合规提示: stock-sdk 通过 node bridge.mjs 抓取第三方财经网站(如东方财富)的行情接口,
+#    未经对方授权,可能违反其服务条款并涉及交易所行情版权。默认不打包(INCLUDE_STOCKSDK=0)。
+#    如确需启用,构建时传 --build-arg INCLUDE_STOCKSDK=1,即视为使用者知悉并自行承担合规责任。
+# INCLUDE_STOCKSDK=0 时,本 stage 仅产出空 node_modules 目录,保证后续 COPY 不报错。
+FROM node:20-bookworm-slim AS stocksdk-builder
+ARG USE_CN_MIRROR=1
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG INCLUDE_STOCKSDK=0
+WORKDIR /build
+RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY"; fi
+COPY backend/app/plugins/stocksdk/package.json backend/app/plugins/stocksdk/package-lock.json ./
+# INCLUDE_STOCKSDK=1 时安装依赖;=0 时仅建空目录,使最终镜像不含 stock-sdk 依赖
+RUN if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
+      (npm ci || npm install); \
+    else \
+      mkdir -p /build/node_modules; \
+    fi
+
 # === Stage 1c: Codex CLI ===
 # 固定版本保证镜像可复现；只复制安装产物到运行镜像，不保留 npm。
 FROM node:20-bookworm-slim AS codex-builder
@@ -46,6 +66,7 @@ ARG USE_CN_MIRROR=1
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ARG BACKEND_EXTRAS=
+ARG INCLUDE_STOCKSDK=0
 WORKDIR /app
 
 # Codex CLI 从官方 npm 包提取原生二进制，不依赖运行时 Node.js。
@@ -58,6 +79,10 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     fi \
     && apt-get update \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
+         apt-get install -y --no-install-recommends nodejs \
+         && node --version; \
+       fi \
     && rm -rf /var/lib/apt/lists/* \
     && tesseract --version
 
@@ -99,6 +124,8 @@ RUN set -- --no-dev; \
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
 # 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
 COPY backend/app ./app
+# Optional stock-sdk dependencies are copied separately from the build stage.
+COPY --from=stocksdk-builder /build/node_modules ./app/plugins/stocksdk/node_modules
 COPY tiers.yaml /app/tiers.yaml
 ENV STATIC_DIR=/app/static \
     TIERS_YAML=/app/tiers.yaml \
